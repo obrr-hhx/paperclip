@@ -62,6 +62,9 @@ import {
   updateDecisionQueueSchema,
   updateDecisionTriageSchema,
   updateDecisionRetentionSchema,
+  // Task pool
+  createTaskPoolSchema,
+  taskPoolActionSchema,
   // Routine
   createRoutineSchema,
   updateRoutineSchema,
@@ -2996,6 +2999,30 @@ registry.registerPath({
   summary: "Delete a project workspace",
   request: { params: z.object({ id: z.string(), workspaceId: z.string() }) },
   responses: { 200: r.ok(), 401: r.unauthorized },
+});
+
+// Durable planner-owned task pools.
+registerCurrentRoute({
+  method: "get", path: "/api/companies/{companyId}/task-pool", tags: ["task-pool"],
+  summary: "List durable requirements and task progress",
+});
+registerCurrentRoute({
+  method: "post", path: "/api/companies/{companyId}/task-pool", tags: ["task-pool"],
+  summary: "Record a draft requirement and bounded task DAG", body: createTaskPoolSchema,
+  responses: { 201: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden, 422: r.unprocessable },
+});
+registerCurrentRoute({
+  method: "get", path: "/api/task-pool/{id}", tags: ["task-pool"],
+  summary: "Read a requirement, attempts and exact review candidate",
+});
+registerCurrentRoute({
+  method: "post", path: "/api/task-pool/{id}/sync", tags: ["task-pool"],
+  summary: "Rebuild durable requirement and inbox indexes",
+});
+registerCurrentRoute({
+  method: "post", path: "/api/task-pool/{id}/actions", tags: ["task-pool"],
+  summary: "Publish, pause, retry, claim review, accept or request rework", body: taskPoolActionSchema,
+  responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden, 404: r.notFound, 409: r.conflict, 422: r.unprocessable },
 });
 
 // ─── Routines ────────────────────────────────────────────────────────────────

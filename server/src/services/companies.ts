@@ -2,6 +2,7 @@ import { and, count, eq, gte, inArray, isNull, lt, notInArray, sql } from "drizz
 import type { Db } from "@paperclipai/db";
 import {
   companies,
+  taskPoolBatches,
   companyLogos,
   assets,
   agents,
@@ -524,6 +525,7 @@ export function companyService(db: Db) {
     remove: (id: string) =>
       db.transaction(async (tx) => {
         // Delete from child tables in dependency order
+        await tx.delete(taskPoolBatches).where(eq(taskPoolBatches.companyId, id));
         const companyRunIds = await tx
           .select({ id: heartbeatRuns.id })
           .from(heartbeatRuns)

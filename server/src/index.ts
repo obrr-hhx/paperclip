@@ -38,6 +38,7 @@ import {
   instanceUserRoles,
 } from "@paperclipai/db";
 import detectPort from "detect-port";
+import { taskPoolService } from "./services/task-pool.js";
 import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { logger } from "./middleware/logger.js";
@@ -1292,6 +1293,7 @@ async function startServerWithDatabaseTeardown(
       heartbeat.drainActiveRunExecutions();
     prepareHotRestartShutdown = heartbeat.prepareHotRestartShutdown;
     const environmentCustomImages = environmentCustomImageService(db as any, { pluginWorkerManager });
+    const taskPool = taskPoolService(db as any);
     const routines = routineService(db as any, { pluginWorkerManager });
     const statusCards = statusCardService(db as any);
     const issues = issueService(db as any);
@@ -1633,6 +1635,7 @@ async function startServerWithDatabaseTeardown(
         }
 
         if (!(await heartbeat.resolveSchedulingSuppression()).suppressed) {
+          trackHeartbeatSchedulerWork(taskPool.tick(heartbeat).catch((err) => logger.error({ err }, "task pool scheduler tick failed")));
           trackHeartbeatSchedulerWork(heartbeat
             .tickTimers(new Date())
             .then((result) => {

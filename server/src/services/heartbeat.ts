@@ -22775,6 +22775,9 @@ export function heartbeatService(
 
     let agent = await getAgent(agentId);
     if (!agent) throw notFound("Agent not found");
+    // Pool workers are one-attempt executors. Only the pool dispatcher may
+    // start them; comments, timers and legacy recovery must not add another run.
+    if (agent.metadata?.taskPoolAttemptId && (opts.reason !== "task_pool_dispatch" || opts.requestedByActorType !== "system")) return null;
     if (agent.adapterType === "paperclip_runner") {
       const oldConfig = parseObject(agent.adapterConfig);
       const nextConfig = normalizeLegacyRunnerProvider(oldConfig);

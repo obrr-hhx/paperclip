@@ -10249,6 +10249,9 @@ export function issueRoutes(
       req.body.assigneeAgentId as string | null | undefined,
       { actorType: req.actor.type },
     );
+    if (existing.originKind === "task_pool" && Object.keys(req.body).some((key) => key !== "comment")) {
+      throw conflict("Task pool cards are projections; use the task pool actions API to change their execution state");
+    }
     const titleOrDescriptionChanged = req.body.title !== undefined || req.body.description !== undefined;
     const existingRelations =
       Array.isArray(req.body.blockedByIssueIds)
@@ -11937,6 +11940,7 @@ export function issueRoutes(
     const existing = await getAccessibleResource(req, res, svc.getById(id), "Issue not found");
     if (!existing) return;
     if (!(await assertAgentIssueMutationAllowed(req, res, existing))) return;
+    if (existing.originKind === "task_pool") throw conflict("Task pool records retain execution history and cannot be deleted through task cards");
     const attachments = await svc.listAttachments(id);
 
     const issue = await svc.remove(id);
@@ -11974,6 +11978,7 @@ export function issueRoutes(
     const id = req.params.id as string;
     const issue = await getAccessibleResource(req, res, svc.getById(id), "Issue not found");
     if (!issue) return;
+    if (issue.originKind === "task_pool") throw conflict("Task pool tasks are dispatched by the scheduler");
 
     if (issue.projectId) {
       const project = await projectsSvc.getById(issue.projectId);
