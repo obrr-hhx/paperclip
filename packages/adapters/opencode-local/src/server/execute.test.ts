@@ -10,8 +10,33 @@ vi.mock("@paperclipai/adapter-utils/execution-target", async (importOriginal) =>
 
 import { ensureRemoteOpenCodeModelConfiguredAndAvailable, execute } from "./execute.js";
 import { runAdapterExecutionTargetProcess } from "@paperclipai/adapter-utils/execution-target";
+import * as openCodeSkills from "./skills.js";
 
 const runProcessMock = vi.mocked(runAdapterExecutionTargetProcess);
+
+describe("OpenCode signal termination", () => {
+  it.each(["SIGKILL", "SIGTERM"])("keeps %s as a failed adapter result", async (signal) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-opencode-signal-"));
+    const skillHome = vi.spyOn(openCodeSkills, "resolveOpenCodeSkillsHome").mockReturnValue(path.join(root, "skills"));
+    runProcessMock.mockReset();
+    runProcessMock.mockResolvedValueOnce(probeResult({ exitCode: null, signal }));
+    try {
+      const result = await execute({
+        runId: "signal-run", agent: { id: "agent", companyId: "company", name: "worker", adapterType: "opencode_local", adapterConfig: {} },
+        runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+        config: { command: process.execPath, cwd: root, model: "deepseek/test", env: { OPENCODE_ALLOW_ALL_MODELS: "1" } },
+        context: {}, onLog: async () => {},
+      });
+      expect(result.exitCode).toBeNull();
+      expect(result.signal).toBe(signal);
+      expect(result.errorMessage).toBe(`OpenCode terminated by signal ${signal}`);
+      expect(runProcessMock).toHaveBeenCalledTimes(1);
+    } finally {
+      skillHome.mockRestore();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 async function createSkillDir(root: string, name: string): Promise<string> {
   const skillDir = path.join(root, name);

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { IssueReviewAttention } from "@paperclipai/shared";
-import { withRecoveryContext } from "./status-only-context.js";
+import { withRecoveryContext } from "../../lib/recovery-context.js";
 
 export const ISSUE_REVIEW_PATH_LOST_WAKE_REASON = "issue_review_path_lost";
 export const REVIEW_PATH_RECOVERY_INSTRUCTION =

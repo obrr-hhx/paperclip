@@ -6,6 +6,7 @@ import { normalizeIssueExecutionPolicy } from "../services/issue-execution-polic
 const mockIssueService = vi.hoisted(() => ({
   getById: vi.fn(),
   getByIdForUpdate: vi.fn(),
+  getAttachmentById: vi.fn(),
   findOpenAncestorCreatedByAgent: vi.fn(async () => null),
   assertCheckoutOwner: vi.fn(),
   update: vi.fn(),
@@ -193,6 +194,29 @@ async function createApp(actor?: TestActor) {
 }
 
 describe("issue execution policy routes", () => {
+  it.each(["missing", "other-company", "other-issue", "wrong-digest"])("rejects a %s candidate attachment before mutation", async (kind) => {
+    const issue = {
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", companyId: "company-1", status: "in_progress",
+      assigneeAgentId: "33333333-3333-4333-8333-333333333333", assigneeUserId: null,
+      title: "Candidate", identifier: "PAP-1", executionState: null,
+      executionPolicy: normalizeIssueExecutionPolicy({ stages: [{ type: "review", participants: [{ type: "agent", agentId: "22222222-2222-4222-8222-222222222222" }] }] }),
+    };
+    const candidate = { attachmentId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", sha256: "a".repeat(64) };
+    mockIssueService.getById.mockResolvedValue(issue);
+    mockIssueService.getAttachmentById.mockResolvedValue(kind === "missing" ? null : {
+      id: candidate.attachmentId, companyId: kind === "other-company" ? "company-2" : issue.companyId,
+      issueId: kind === "other-issue" ? "other-issue" : issue.id,
+      sha256: kind === "wrong-digest" ? "b".repeat(64) : candidate.sha256,
+    });
+    const res = await request(await createApp({ type: "agent", agentId: issue.assigneeAgentId,
+      companyId: issue.companyId, runId: "55555555-5555-4555-8555-555555555555" }))
+      .patch(`/api/issues/${issue.id}`).send({ status: "in_review", comment: "Ready",
+        reviewRequest: { instructions: "Verify", candidate } });
+    expect(res.status).toBe(422);
+    expect(res.body.error).toContain("attachment of this issue");
+    expect(mockIssueService.update).not.toHaveBeenCalled();
+    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     vi.resetModules();
     vi.doUnmock("../services/index.js");

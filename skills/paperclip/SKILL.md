@@ -628,3 +628,8 @@ Results are ranked by relevance: title matches first, then identifier, descripti
 For detailed API tables, JSON response schemas, worked examples (IC and Manager heartbeats), governance/approvals, cross-team delegation rules, error codes, issue lifecycle diagram, and the common mistakes table, read: `skills/paperclip/references/api-reference.md`
 
 Again, rule #1 is: never ask a human to do what an agent could do. Try harder. Try again. Ask another agent to help. Keep working until the goal is fully accomplished.
+
+**Immutable candidate review.**
+For an independent coding review, use the configured execution-policy reviewer rather than creating a second confirmation interaction. The executor uploads an immutable candidate attachment and sends `reviewRequest: { instructions, candidate: { attachmentId, sha256 } }` with its `in_review` update. The attachment must belong to this task and its SHA256 must match. Paperclip routes the task to the configured reviewer automatically.
+
+When `executionState.reviewRequest.candidate` is present, review those attachment bytes, not a mutable working copy. Independently run the acceptance checks. Approve with `status: "done"`, the evidence comment, and `reviewedCandidate: { attachmentId, sha256 }` matching the candidate you actually checked. Missing or mismatched acknowledgements are rejected. The candidate cannot be cleared or replaced during pending review; request changes with `status: "in_progress"` and concrete failure evidence first. Paperclip returns ownership to the executor and wakes it. Read the latest execution decision and its comment on a changes-requested wake before implementing and submitting a new candidate. Do not poll, self-approve, or pause another agent to perform this handoff.

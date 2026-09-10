@@ -12,7 +12,7 @@ import {
   isWorkspaceValidationFailedRun,
   readNonEmptyString,
 } from "../domain/values.js";
-import { withRecoveryContext } from "../../../services/recovery/status-only-context.js";
+import { withRecoveryContext } from "../../../lib/recovery-context.js";
 import type {
   AdmitWakeBehindIssueExecutionResult,
   DeferredWakeCandidate,

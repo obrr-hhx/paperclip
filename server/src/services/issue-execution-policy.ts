@@ -52,6 +52,7 @@ type TransitionInput = {
   allowBoardOverride?: boolean;
   commentBody?: string | null;
   reviewRequest?: IssueExecutionState["reviewRequest"] | null;
+  reviewedCandidate?: NonNullable<IssueExecutionState["reviewRequest"]>["candidate"];
   monitorExplicitlyUpdated?: boolean;
 };
 
@@ -521,7 +522,7 @@ function buildCompletedState(previous: IssueExecutionState | null, currentStage:
     currentStageType: null,
     currentParticipant: null,
     returnAssignee: previous?.returnAssignee ?? null,
-    reviewRequest: null,
+    reviewRequest: previous?.reviewRequest?.candidate ? previous.reviewRequest : null,
     completedStageIds,
     lastDecisionId: previous?.lastDecisionId ?? null,
     lastDecisionOutcome: "approved",
@@ -674,6 +675,19 @@ function applyIssueExecutionStageTransition(input: TransitionInput): TransitionR
     ? existingState?.reviewRequest ?? null
     : input.reviewRequest;
 
+  const candidate = existingState?.reviewRequest?.candidate;
+  if (existingState?.status === PENDING_STATUS && candidate && !input.allowBoardOverride &&
+    input.previousPolicy !== undefined && JSON.stringify(input.previousPolicy) !== JSON.stringify(input.policy)) {
+    throw unprocessable("Request changes before changing the execution policy of a pending candidate review");
+  }
+  if (activeStage && candidate && input.reviewRequest !== undefined) {
+    const requested = input.reviewRequest?.candidate;
+    if (requested?.attachmentId !== candidate.attachmentId || requested?.sha256 !== candidate.sha256 ||
+      input.reviewRequest?.instructions !== existingState?.reviewRequest?.instructions) {
+      throw unprocessable("A pending review candidate is immutable; request changes before submitting a new candidate");
+    }
+  }
+
   if (!input.policy) {
     if (existingState) {
       patch.executionState = null;
@@ -785,6 +799,12 @@ function applyIssueExecutionStageTransition(input: TransitionInput): TransitionR
 
     if (principalsEqual(currentParticipant, actor)) {
       if (requestedStatus === "done") {
+        if (candidate && (
+          input.reviewedCandidate?.attachmentId !== candidate.attachmentId ||
+          input.reviewedCandidate?.sha256 !== candidate.sha256
+        )) {
+          throw unprocessable("Approval must acknowledge the current review candidate attachment and SHA256");
+        }
         if (!input.commentBody?.trim()) {
           throw unprocessable(`Approving a review or approval stage requires a comment. ${STAGE_DECISION_COMMENT_HINT}`);
         }
@@ -824,7 +844,7 @@ function applyIssueExecutionStageTransition(input: TransitionInput): TransitionR
           stage: nextStage,
           participant,
           returnAssignee: existingState?.returnAssignee ?? currentAssignee ?? actor,
-          reviewRequest: input.reviewRequest ?? null,
+          reviewRequest: effectiveReviewRequest?.candidate ? effectiveReviewRequest : input.reviewRequest ?? null,
         });
         return {
           patch,

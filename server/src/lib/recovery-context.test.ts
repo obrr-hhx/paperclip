@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { withRecoveryContext } from "./status-only-context.js";
+import { withRecoveryContext } from "./recovery-context.js";
 
 describe("withRecoveryContext", () => {
   it("applies status-only mutation guards without selecting a model", () => {

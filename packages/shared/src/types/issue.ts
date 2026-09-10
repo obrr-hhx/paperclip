@@ -714,6 +714,8 @@ export interface IssueExecutionMonitorState {
 
 export interface IssueReviewRequest {
   instructions: string;
+  /** Immutable issue attachment being reviewed, rather than a mutable workspace. */
+  candidate?: { attachmentId: string; sha256: string };
 }
 
 export interface IssueExecutionState {

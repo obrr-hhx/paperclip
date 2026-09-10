@@ -434,6 +434,7 @@ export {
   issueRecoveryActionReadModelSchema,
   resolveIssueRecoveryActionSchema,
   issueReviewRequestSchema,
+  issueReviewCandidateSchema,
   issueExecutionWorkspaceSettingsSchema,
   checkoutIssueSchema,
   issueCommentAuthorTypeSchema,

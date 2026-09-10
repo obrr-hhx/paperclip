@@ -8,6 +8,86 @@ const ctoAgentId = "33333333-3333-4333-8333-333333333333";
 const ctoUserId = "cto-user";
 const boardUserId = "board-user";
 
+describe("immutable review candidates", () => {
+  const candidate = { attachmentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", sha256: "a".repeat(64) };
+  function submitted() {
+    const policy = reviewOnlyPolicy();
+    const transition = applyIssueExecutionPolicyTransition({
+      issue: { status: "in_progress", assigneeAgentId: coderAgentId },
+      policy, requestedStatus: "in_review", requestedAssigneePatch: {},
+      actor: { agentId: coderAgentId }, commentBody: "Candidate ready",
+      reviewRequest: { instructions: "Independently test the attachment", candidate },
+    });
+    return { policy, issue: { status: "in_review", assigneeAgentId: qaAgentId, executionState: transition.patch.executionState as IssueExecutionState } };
+  }
+  it("requires the reviewer to acknowledge the current candidate", () => {
+    for (const reviewedCandidate of [undefined, { ...candidate, sha256: "b".repeat(64) }, { ...candidate, attachmentId: qaAgentId }]) {
+      expect(() => applyIssueExecutionPolicyTransition({
+        ...submitted(), requestedStatus: "done", requestedAssigneePatch: {},
+        actor: { agentId: qaAgentId }, commentBody: "Tests passed", reviewedCandidate,
+      })).toThrow("acknowledge the current review candidate");
+    }
+  });
+  it("preserves the accepted candidate and advances only for the reviewer", () => {
+    const input = { ...submitted(), requestedStatus: "done", requestedAssigneePatch: {},
+      actor: { agentId: qaAgentId }, commentBody: "Independent tests passed", reviewedCandidate: candidate };
+    const result = applyIssueExecutionPolicyTransition(input);
+    expect(result.decision?.outcome).toBe("approved");
+    expect(result.patch.executionState).toMatchObject({ status: "completed", reviewRequest: { candidate } });
+    expect(() => applyIssueExecutionPolicyTransition({ ...input, actor: { agentId: coderAgentId } })).toThrow();
+  });
+  it("cannot clear or replace a candidate while review is pending", () => {
+    for (const reviewRequest of [null, { instructions: "clear" }, { instructions: "changed requirements", candidate }, { instructions: "replace", candidate: { ...candidate, sha256: "b".repeat(64) } }]) {
+      expect(() => applyIssueExecutionPolicyTransition({
+        ...submitted(), requestedAssigneePatch: {}, actor: { agentId: coderAgentId }, reviewRequest,
+      })).toThrow("immutable");
+    }
+  });
+  it("prevents removing or replacing the pending policy to bypass review", () => {
+    const current = submitted();
+    for (const policy of [null, twoStagePolicy()]) {
+      expect(() => applyIssueExecutionPolicyTransition({ ...current, previousPolicy: current.policy,
+        policy, requestedStatus: "done", requestedAssigneePatch: {}, actor: { agentId: qaAgentId },
+      })).toThrow("before changing the execution policy");
+    }
+  });
+  it("returns a rejected candidate to its executor and accepts a new submission", () => {
+    const { issue, policy } = submitted();
+    const rejection = applyIssueExecutionPolicyTransition({ issue, policy,
+      requestedStatus: "in_progress", requestedAssigneePatch: {}, actor: { agentId: qaAgentId },
+      commentBody: "Fails empty-input acceptance",
+    });
+    expect(rejection.patch).toMatchObject({ status: "in_progress", assigneeAgentId: coderAgentId });
+    expect(rejection.decision).toMatchObject({ outcome: "changes_requested", body: "Fails empty-input acceptance" });
+    const next = { ...candidate, sha256: "b".repeat(64) };
+    const resubmit = applyIssueExecutionPolicyTransition({
+      issue: { ...issue, ...rejection.patch, executionState: rejection.patch.executionState as IssueExecutionState }, policy,
+      requestedStatus: "in_review", requestedAssigneePatch: {}, actor: { agentId: coderAgentId },
+      commentBody: "Fixed", reviewRequest: { instructions: "Recheck", candidate: next },
+    });
+    expect(resubmit.patch.executionState).toMatchObject({ status: "pending", reviewRequest: { candidate: next } });
+  });
+  it("keeps the same candidate through later approval stages", () => {
+    const policy = twoStagePolicy();
+    const submission = applyIssueExecutionPolicyTransition({
+      issue: { status: "in_progress", assigneeAgentId: coderAgentId }, policy,
+      requestedStatus: "in_review", requestedAssigneePatch: {}, actor: { agentId: coderAgentId },
+      commentBody: "Ready", reviewRequest: { instructions: "Verify exact bytes", candidate },
+    });
+    const review = applyIssueExecutionPolicyTransition({
+      issue: { status: "in_review", assigneeAgentId: qaAgentId, executionState: submission.patch.executionState as IssueExecutionState },
+      policy, requestedStatus: "done", requestedAssigneePatch: {}, actor: { agentId: qaAgentId },
+      commentBody: "Verified", reviewedCandidate: candidate,
+    });
+    expect(review.patch.executionState).toMatchObject({ status: "pending", currentStageType: "approval", reviewRequest: { candidate } });
+    const approval = { issue: { status: "in_review", assigneeUserId: ctoUserId, executionState: review.patch.executionState as IssueExecutionState },
+      policy, requestedStatus: "done", requestedAssigneePatch: {}, actor: { userId: ctoUserId }, commentBody: "Accepted" };
+    expect(() => applyIssueExecutionPolicyTransition(approval)).toThrow("acknowledge");
+    expect(applyIssueExecutionPolicyTransition({ ...approval, reviewedCandidate: candidate }).patch.executionState)
+      .toMatchObject({ status: "completed", reviewRequest: { candidate } });
+  });
+});
+
 function makePolicy(
   stages: Array<{ type: "review" | "approval"; participants: Array<{ type: "agent" | "user"; agentId?: string; userId?: string }> }>,
 ) {

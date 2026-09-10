@@ -10258,6 +10258,7 @@ export function issueRoutes(
       comment: commentBody,
       reviewInteractionId: requestedReviewInteractionId,
       reviewRequest,
+      reviewedCandidate,
       reopen: reopenRequested,
       resume: resumeRequested,
       interrupt: interruptRequested,
@@ -10519,6 +10520,24 @@ export function issueRoutes(
       req.body.executionPolicy !== undefined && monitorChanged,
     );
 
+    // Candidate bytes are already immutable in attachment storage. Never accept
+    // a caller's digest for another task/company or a deleted attachment.
+    const candidate = reviewRequest?.candidate ??
+      (reviewedCandidate ? parseIssueExecutionState(existing.executionState)?.reviewRequest?.candidate : undefined);
+    const pendingReview = parseIssueExecutionState(existing.executionState);
+    if (pendingReview?.status === "pending" && pendingReview.reviewRequest?.candidate && (
+      (updateFields.title !== undefined && updateFields.title !== existing.title) ||
+      (updateFields.description !== undefined && updateFields.description !== existing.description)
+    )) {
+      throw unprocessable("Request changes before changing the requirements of a pending candidate review");
+    }
+    if (candidate) {
+      const attachment = await svc.getAttachmentById(candidate.attachmentId);
+      if (!attachment || attachment.companyId !== existing.companyId ||
+        attachment.issueId !== existing.id || attachment.sha256 !== candidate.sha256) {
+        throw unprocessable("Review candidate must match an existing attachment of this issue and its SHA256");
+      }
+    }
     const transition = applyIssueExecutionPolicyTransition({
       issue: existing,
       policy: nextExecutionPolicy,
@@ -10536,6 +10555,7 @@ export function issueRoutes(
       allowBoardOverride: req.actor.type === "board",
       commentBody,
       reviewRequest: reviewRequest === undefined ? undefined : reviewRequest,
+      reviewedCandidate,
       monitorExplicitlyUpdated: req.body.executionPolicy !== undefined && monitorChanged,
     });
     const decisionId = transition.decision ? randomUUID() : null;

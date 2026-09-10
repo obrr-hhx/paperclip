@@ -17,7 +17,7 @@ import { isAutomaticRecoverySuppressedByPauseHold } from "../../../services/reco
 import { issueService } from "../../../services/issues.js";
 import { issueRecoveryActionService } from "../../../services/issue-recovery-actions.js";
 import { readContinuationAttempt } from "../../../services/recovery/run-liveness-continuations.js";
-import { withRecoveryContext } from "../../../services/recovery/status-only-context.js";
+import { withRecoveryContext } from "../../../lib/recovery-context.js";
 import { parseIssueExecutionState } from "../../../services/issue-execution-policy.js";
 import {
   queuedCommentIdsFromWakePayload,

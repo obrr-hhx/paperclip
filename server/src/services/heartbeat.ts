@@ -1,4 +1,5 @@
 import { getExecutionBlocker } from "./execution-blocker.js";
+import { legacyAdapterOutcome } from "./heartbeat-run-outcome.js";
 import { legacyExecutionNeedsReconciliation, terminalizeLegacyExecution } from "./legacy-execution-recovery.js";
 import { adapterExecutionControls, createAdapterExecutionControl, waitForAdapterStop } from "./adapter-execution-control.js";
 import { executionFailureRetryCount } from "./execution-recovery-attempt.js";
@@ -383,7 +384,7 @@ import {
   SANDBOX_PROVIDER_PLUGIN_NOT_READY_REASON,
   type StrandedRecoveryNoticeSeed,
 } from "./recovery/stranded-notice.js";
-import { withRecoveryContext } from "./recovery/status-only-context.js";
+import { withRecoveryContext } from "../lib/recovery-context.js";
 import {
   ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS as RECOVERY_ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS,
   recoveryService,
@@ -21538,15 +21539,8 @@ export function heartbeatService(
               : nativeTerminal === "cancelled"
                 ? "cancelled"
                 : "failed";
-        } else if (adapterResult.timedOut) {
-          outcome = "timed_out";
-        } else if (
-          (adapterResult.exitCode ?? 0) === 0 &&
-          !adapterResult.errorMessage
-        ) {
-          outcome = "succeeded";
         } else {
-          outcome = "failed";
+          outcome = legacyAdapterOutcome(adapterResult);
         }
 
         const nextSessionState = resolveNextSessionState({

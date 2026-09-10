@@ -2642,6 +2642,20 @@ export function IssueProperties({
           </PropertyRow>
         )}
 
+        {issue.executionState?.reviewRequest?.candidate && (
+          <PropertyRow label="Review candidate">
+            <a
+              href={`/api/attachments/${issue.executionState.reviewRequest.candidate.attachmentId}/content`}
+              className="text-sm font-mono truncate min-w-0 underline"
+              title={`SHA256: ${issue.executionState.reviewRequest.candidate.sha256}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {issue.executionState.reviewRequest.candidate.sha256.slice(0, 12)}
+            </a>
+          </PropertyRow>
+        )}
+
         {showScheduledRetryRow && scheduledRetryContent ? (
           <PropertyPicker
             inline={inline}

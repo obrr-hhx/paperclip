@@ -2,7 +2,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agentWakeupRequests, agents, heartbeatRuns, issues } from "@paperclipai/db";
 import type { IssueCommentMetadata, IssueCommentPresentation, RunLivenessState } from "@paperclipai/shared";
-import { withRecoveryContext } from "./status-only-context.js";
+import { withRecoveryContext } from "../../lib/recovery-context.js";
 import {
   agentLinkRow,
   issueLinkRow,

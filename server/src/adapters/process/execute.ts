@@ -80,12 +80,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     };
   }
 
-  if ((proc.exitCode ?? 0) !== 0) {
+  if (proc.signal || proc.exitCode !== 0) {
     return {
       exitCode: proc.exitCode,
       signal: proc.signal,
       timedOut: false,
-      errorMessage: `Process exited with code ${proc.exitCode ?? -1}`,
+      errorMessage: proc.signal
+        ? `Process terminated by signal ${proc.signal}`
+        : `Process exited with code ${proc.exitCode ?? -1}`,
       resultJson: {
         stdout: proc.stdout,
         stderr: proc.stderr,

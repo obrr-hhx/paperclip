@@ -75,7 +75,7 @@ import {
   RECOVERY_ORIGIN_KINDS,
   isStrandedIssueRecoveryOriginKind,
 } from "./origins.js";
-import { withRecoveryContext } from "./status-only-context.js";
+import { withRecoveryContext } from "../../lib/recovery-context.js";
 import { isAutomaticRecoverySuppressedByPauseHold } from "./pause-hold-guard.js";
 import {
   collectDispositionRepairSourceState,

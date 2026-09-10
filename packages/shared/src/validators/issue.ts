@@ -317,8 +317,14 @@ export const issueExecutionMonitorStateSchema = z.object({
   clearReason: z.enum(ISSUE_EXECUTION_MONITOR_CLEAR_REASONS).nullable(),
 });
 
+export const issueReviewCandidateSchema = z.object({
+  attachmentId: z.string().guid(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/, "Expected a lowercase SHA256 digest"),
+}).strict();
+
 export const issueReviewRequestSchema = z.object({
   instructions: z.string().trim().min(1).max(20000),
+  candidate: issueReviewCandidateSchema.optional(),
 }).strict();
 
 export const issueExecutionStateSchema = z.object({
@@ -610,6 +616,7 @@ export const updateIssueSchema = objectWithoutDefaults(
   onBehalfOfUserId: z.string().trim().min(1).optional().nullable(),
   reviewInteractionId: z.string().guid().optional(),
   reviewRequest: issueReviewRequestSchema.optional().nullable(),
+  reviewedCandidate: issueReviewCandidateSchema.optional(),
   reopen: z.boolean().optional(),
   resume: z.boolean().optional(),
   interrupt: z.boolean().optional(),
