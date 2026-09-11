@@ -9,12 +9,16 @@ export const poolStatusLabels: Record<PoolState["status"], string> = {
   needs_attention: "需要处理",
   ready_for_review: "等待验收",
   accepted: "已验收",
+  closed: "已关闭",
+  superseded: "已替代",
 };
 export const taskStatusLabels: Record<PoolTask["status"], string> = {
   pending: "等待执行",
   running: "执行中",
   succeeded: "已交付",
   blocked: "受阻",
+  closed: "已关闭",
+  superseded: "已替代",
 };
 export function taskWaitReason(task: PoolTask, batch: TaskPoolBatch) {
   if (task.status !== "pending") return null;

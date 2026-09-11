@@ -22,6 +22,15 @@ describe("task pool authorization", () => {
     const batch = { id, companyId, issueId: id, state: { generation: 1, review: { token } } };
     mocks.get.mockResolvedValue(batch); mocks.action.mockResolvedValue(batch);
   });
+  it("allows planner status changes and denies execution workers", async () => {
+    const body = { action: "set_status", status: "closed", taskKey: "obsolete", reason: "Removed from scope" };
+    const response = await request(app({ type: "board", source: "local_implicit", userId: "local" })).post(`/task-pool/${id}/actions`).send(body);
+    expect(response.status).toBe(200);
+    expect(mocks.action).toHaveBeenCalledWith(id, body, expect.any(String));
+    mocks.action.mockClear(); mocks.getAgent.mockResolvedValue({ metadata: { taskPoolAttemptId: id } }); mocks.hasPermission.mockResolvedValue(true);
+    const denied = await request(app({ type: "agent", agentId: id, companyId })).post(`/task-pool/${id}/actions`).send(body);
+    expect(denied.status).toBe(403); expect(mocks.action).not.toHaveBeenCalled();
+  });
   it("does not expose review claims through reads", async () => {
     const response = await request(app({ type: "board", source: "local_implicit", userId: "local" })).get(`/task-pool/${id}`);
     expect(response.status).toBe(200); expect(response.text).not.toContain(token);

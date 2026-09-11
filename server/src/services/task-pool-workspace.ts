@@ -39,7 +39,7 @@ export async function preparePoolWorkspace(batch: PoolBatch, cwd: string, commit
   return poolGit(cwd, "rev-parse", "HEAD");
 }
 export function poolTaskMarkdown(batch: PoolBatch, task: PoolTask) {
-  return `# ${task.key}: ${task.title}\n\nRequirement: ${batch.config.title}\nGeneration: ${batch.state.generation}\nStatus: ${task.status}\n\n## Requirement\n${batch.config.requirement}\n\n## Task\n${task.instructions}\n\n## Allowed changes\n${task.allowedPaths.map((p) => `- ${p}`).join("\n")}\n\n## Acceptance\n${task.acceptance.map((p) => `- ${p}`).join("\n")}\n\nDependencies: ${task.dependsOn.join(", ") || "none"}\nBase: ${batch.config.baseSha}\n`;
+  return `# ${task.key}: ${task.title}\n\nRequirement: ${batch.config.title}\nGeneration: ${batch.state.generation}\nStatus: ${task.status}\n${task.closure ? `Closure: ${task.closure.reason}\nReplacement: ${task.closure.replacement ?? "none"}\n` : ""}\n## Requirement\n${batch.config.requirement}\n\n## Task\n${task.instructions}\n\n## Allowed changes\n${task.allowedPaths.map((p) => `- ${p}`).join("\n")}\n\n## Acceptance\n${task.acceptance.map((p) => `- ${p}`).join("\n")}\n\nDependencies: ${task.dependsOn.join(", ") || "none"}\nBase: ${batch.config.baseSha}\n`;
 }
 const resultSchema = z.object({ status: z.enum(["completed", "blocked"]), summary: z.string().min(1).max(10000), tests: z.array(z.string().max(2000)).max(50).default([]) });
 export async function collectPoolResult(task: PoolTask, attempt: PoolAttempt) {
@@ -74,13 +74,13 @@ export async function projectPoolBatch(batch: PoolBatch) {
   const root = path.join(poolPublicRoot(), "requirements", poolInstance(), batch.id);
   const baseUrl = process.env.PAPERCLIP_TASK_POOL_PUBLIC_URL ?? `http://127.0.0.1:${process.env.PORT ?? 3100}`;
   const context = { instanceId: poolInstance(), batchId: batch.id, companyId: batch.companyId, issueId: batch.issueId,
-    apiUrl: `${baseUrl}/api`, generation: batch.state.generation, status: batch.state.status,
+    apiUrl: `${baseUrl}/api`, generation: batch.state.generation, status: batch.state.status, closure: batch.state.closure,
     syncedAt: new Date().toISOString(), candidate: batch.state.candidate,
-    tasks: batch.state.tasks.map((t) => ({ key: t.key, issueId: t.issueId, status: t.status, retryAt: t.retryAt, attempts: t.attempts })),
+    tasks: batch.state.tasks.map((t) => ({ key: t.key, issueId: t.issueId, status: t.status, closure: t.closure, retryAt: t.retryAt, attempts: t.attempts })),
     originSession: batch.config.originSession };
   await atomicPoolFile(path.join(root, "context.json"), JSON.stringify(context, null, 2));
   await atomicPoolFile(path.join(root, "REQUIREMENT.md"), redactSensitiveText(batch.config.requirement));
-  await atomicPoolFile(path.join(root, "SUMMARY.md"), `# ${batch.config.title}\n\nStatus: ${batch.state.status}\nGeneration: ${batch.state.generation}\nSynced: ${context.syncedAt}\nBoard: ${baseUrl}/issues/${batch.issueId}\n\n${batch.state.tasks.map((t) => `- ${t.key}: ${t.status} (${t.attempts.length} attempts)${t.retryAt ? `; retry after ${t.retryAt}` : ""}${t.attempts.at(-1)?.lease?.recoveryError ? `; ${t.attempts.at(-1)!.lease!.recoveryError}` : ""}`).join("\n")}\n\nRead current server state before claiming review or submitting a verdict. Files are a regenerable index, not the source of truth.\n`);
+  await atomicPoolFile(path.join(root, "SUMMARY.md"), `# ${batch.config.title}\n\nStatus: ${batch.state.status}\nGeneration: ${batch.state.generation}\n${batch.state.closure ? `Closure: ${batch.state.closure.reason}\nReplacement: ${batch.state.closure.replacement ?? "none"}\n` : ""}Synced: ${context.syncedAt}\nBoard: ${baseUrl}/issues/${batch.issueId}\n\n${batch.state.tasks.map((t) => `- ${t.key}: ${t.status} (${t.attempts.length} attempts)${t.retryAt ? `; retry after ${t.retryAt}` : ""}${t.attempts.at(-1)?.lease?.recoveryError ? `; ${t.attempts.at(-1)!.lease!.recoveryError}` : ""}`).join("\n")}\n\nRead current server state before claiming review or submitting a verdict. Files are a regenerable index, not the source of truth.\n`);
   for (const task of batch.state.tasks) await atomicPoolFile(path.join(root, "tasks", `${task.key}.md`), redactSensitiveText(poolTaskMarkdown(batch, task)));
   // Notification failures must not prevent durable Inbox projection or worker dispatch.
   let plannerNotification;
@@ -89,7 +89,7 @@ export async function projectPoolBatch(batch: PoolBatch) {
   for (const event of batch.state.events) {
     await atomicPoolFile(path.join(poolPublicRoot(), "inbox", `${event.id}.json`), JSON.stringify({ ...event,
       batchId: batch.id, instanceId: poolInstance(), apiUrl: context.apiUrl, companyId: batch.companyId,
-      currentStatus: batch.state.status, superseded: event.generation !== batch.state.generation || batch.state.status === "accepted",
+      currentStatus: batch.state.status, superseded: event.generation !== batch.state.generation || ["accepted", "closed", "superseded"].includes(batch.state.status),
       plannerNotification: event.generation === batch.state.generation && event.type === batch.state.status ? plannerNotification : undefined,
       requirementPath: root }, null, 2));
   }

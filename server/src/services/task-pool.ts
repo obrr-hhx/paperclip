@@ -24,7 +24,7 @@ const taskDescription = (task: PoolTaskSpec) => `${task.instructions}\n\nAccepta
 function batchDescription(batch: PoolBatch) {
   const candidate = batch.state.candidate;
   const verdict = batch.state.events.findLast((event) => event.type === "accepted");
-  return `${batch.config.requirement}\n\n---\nTask pool: ${batch.id}\nGeneration: ${batch.state.generation}\nStatus: ${batch.state.status}\n${candidate ? `Candidate commit: ${candidate.commit}\nManifest SHA-256: ${candidate.sha256}\n` : ""}${verdict ? `\nPlanner acceptance: ${verdict.evidence}\n` : ""}`;
+  return `${batch.config.requirement}\n\n---\nTask pool: ${batch.id}\nGeneration: ${batch.state.generation}\nStatus: ${batch.state.status}\n${batch.state.closure ? `Closure: ${batch.state.closure.reason}\nReplacement: ${batch.state.closure.replacement ?? "none"}\n` : ""}${candidate ? `Candidate commit: ${candidate.commit}\nManifest SHA-256: ${candidate.sha256}\n` : ""}${verdict ? `\nPlanner acceptance: ${verdict.evidence}\n` : ""}`;
 }
 
 export function taskPoolService(db: Db, now: () => number = Date.now) {
@@ -79,7 +79,30 @@ export function taskPoolService(db: Db, now: () => number = Date.now) {
   async function action(id: string, input: z.infer<typeof taskPoolActionSchema>, owner: string) {
     await locked(id, async (batch, tx) => {
       const state = batch.state;
-      if (input.action === "bind_planner") {
+      if (input.action === "set_status") {
+        if (["accepted", "closed", "superseded"].includes(state.status)) throw conflict("Requirement is already terminal");
+        if (input.status === "superseded" && !input.replacement) throw unprocessable("Superseded requires a replacement URL");
+        if (input.replacement && !["http:", "https:"].includes(new URL(input.replacement).protocol)) throw unprocessable("Replacement must be an HTTP URL");
+        const target = input.taskKey ? state.tasks.find((t) => t.key === input.taskKey) : undefined;
+        if (input.taskKey && !target) throw notFound("Task key not found");
+        const affected = target ? [target] : state.tasks;
+        if (affected.some((t) => t.status === "running" || t.attempts.some((a) => active.has(a.status)))) throw conflict("Pause dispatch and wait for running attempts to stop before closing");
+        if (target && ["succeeded", "closed", "superseded"].includes(target.status)) throw conflict("Task is already terminal");
+        const closure = { status: input.status, reason: input.reason, replacement: input.replacement, owner, createdAt: new Date(now()).toISOString() };
+        for (const task of affected) {
+          if (["succeeded", "closed", "superseded"].includes(task.status)) continue;
+          task.status = input.status; task.closure = closure; delete task.retryAt;
+          await tx.update(issues).set({ status: "cancelled", description: `${taskDescription(task)}\n\n${input.status}: ${input.reason}\n${input.replacement ?? ""}`, updatedAt: new Date() }).where(eq(issues.id, task.issueId));
+        }
+        delete state.review;
+        if (!target) {
+          state.status = input.status; state.closure = closure;
+          delete batch.config.plannerNotification;
+          await tx.update(taskPoolBatches).set({ config: batch.config }).where(eq(taskPoolBatches.id, id));
+        } else if (state.status === "ready_for_review") {
+          state.status = "needs_attention";
+        }
+      } else if (input.action === "bind_planner") {
         if (input.notification) batch.config.plannerNotification = input.notification;
         else delete batch.config.plannerNotification;
         await tx.update(taskPoolBatches).set({ config: batch.config }).where(eq(taskPoolBatches.id, id));
@@ -123,7 +146,7 @@ export function taskPoolService(db: Db, now: () => number = Date.now) {
         }
         delete state.review;
       }
-      await tx.update(issues).set({ description: batchDescription(batch), status: state.status === "accepted" ? "done" : state.status === "ready_for_review" ? "in_review" : "in_progress", updatedAt: new Date() }).where(eq(issues.id, batch.issueId));
+      await tx.update(issues).set({ description: batchDescription(batch), status: ["closed", "superseded"].includes(state.status) ? "cancelled" : state.status === "accepted" ? "done" : state.status === "ready_for_review" ? "in_review" : "in_progress", updatedAt: new Date() }).where(eq(issues.id, batch.issueId));
     });
     return get(id);
   }
@@ -248,8 +271,8 @@ export function taskPoolService(db: Db, now: () => number = Date.now) {
               event(batch, "needs_attention", `Cannot reserve ${task.key}: ${errorText(error)}`);
             }
           }
-          if (!batch.state.tasks.some((t) => t.status === "running") && batch.state.tasks.some((t) => t.status === "blocked")) {
-            batch.state.status = "needs_attention"; event(batch, "needs_attention", "Task attempts exhausted");
+          if (!batch.state.tasks.some((t) => t.status === "running") && batch.state.tasks.some((t) => ["blocked", "closed", "superseded"].includes(t.status))) {
+            batch.state.status = "needs_attention"; event(batch, "needs_attention", batch.state.tasks.some((t) => ["closed", "superseded"].includes(t.status)) ? "Closed tasks cannot satisfy delivery dependencies; planner disposition required" : "Task attempts exhausted");
           }
         }
         await tx.update(issues).set({ description: batchDescription(batch), status: batch.state.status === "ready_for_review" ? "in_review" : batch.state.status === "needs_attention" ? "blocked" : "in_progress", updatedAt: new Date() }).where(eq(issues.id, batch.issueId));

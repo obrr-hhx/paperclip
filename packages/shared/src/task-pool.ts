@@ -41,6 +41,7 @@ export const createTaskPoolSchema = z.object({
 }).strict();
 export const taskPoolActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("bind_planner"), notification: plannerNotificationSchema.nullable() }).strict(),
+  z.object({ action: z.literal("set_status"), status: z.enum(["closed", "superseded"]), taskKey: z.string().min(1).optional(), reason: z.string().trim().min(1).max(20000), replacement: z.string().url().max(2000).optional() }).strict(),
   z.object({ action: z.literal("publish") }).strict(),
   z.object({ action: z.literal("pause") }).strict(),
   z.object({ action: z.literal("resume") }).strict(),
@@ -51,10 +52,12 @@ export const taskPoolActionSchema = z.discriminatedUnion("action", [
 ]);
 export type PoolTaskSpec = z.infer<typeof poolTaskSchema>;
 export type PoolAttempt = { id: string; agentId: string; cwd: string; startedAt: string; runId?: string; status: "reserved" | "running" | "succeeded" | "failed"; error?: string; commit?: string; summary?: string; tests?: string[]; lease?: { host?: string; renewedAt: string; expiresAt: string; recoveryError?: string } };
-export type PoolTask = PoolTaskSpec & { issueId: string; status: "pending" | "running" | "succeeded" | "blocked"; retryLimit?: number; retryAt?: string; attempts: PoolAttempt[] };
+export type PoolClosure = { status: "closed" | "superseded"; reason: string; replacement?: string; owner: string; createdAt: string };
+export type PoolTask = PoolTaskSpec & { issueId: string; status: "pending" | "running" | "succeeded" | "blocked" | "closed" | "superseded"; closure?: PoolClosure; retryLimit?: number; retryAt?: string; attempts: PoolAttempt[] };
 export type PoolEvent = { id: string; type: "ready_for_review" | "needs_attention" | "accepted"; generation: number; createdAt: string; candidate?: string; evidence?: string };
 export type PoolState = {
-  generation: number; status: "draft" | "active" | "paused" | "needs_attention" | "ready_for_review" | "accepted";
+  generation: number; status: "draft" | "active" | "paused" | "needs_attention" | "ready_for_review" | "accepted" | "closed" | "superseded";
+  closure?: PoolClosure;
   tasks: PoolTask[]; events: PoolEvent[];
   candidate?: { sha256: string; commit: string; cwd: string; manifest: string };
   review?: { session: string; owner: string; token: string; expiresAt: string };

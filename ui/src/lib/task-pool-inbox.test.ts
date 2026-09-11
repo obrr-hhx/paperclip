@@ -52,6 +52,17 @@ const fixture = (): TaskPoolBatch => ({
   },
 });
 describe("requirement inbox", () => {
+  it.each(["closed", "superseded"] as const)(
+    "hides %s requirements while preserving trace membership",
+    (status) => {
+      const batch = fixture();
+      batch.state.status = status;
+      batch.state.tasks[0].status = "blocked";
+      const result = poolInboxState([batch]);
+      expect(result.notices).toEqual([]);
+      expect(result.runIds.has("old-run")).toBe(true);
+    },
+  );
   it("hides superseded failures during retry and after acceptance without losing run membership", () => {
     const batch = fixture();
     expect(poolInboxState([batch]).notices).toEqual([]);

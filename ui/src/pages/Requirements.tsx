@@ -25,7 +25,8 @@ export function Requirements() {
   });
   useEffect(() => setBreadcrumbs([{ label: "需求" }]), [setBreadcrumbs]);
   const batches = (query.data ?? []).filter(
-    (batch) => all || batch.state.status !== "accepted",
+    (batch) =>
+      all || !["accepted", "closed", "superseded"].includes(batch.state.status),
   );
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">
@@ -37,7 +38,7 @@ export function Requirements() {
           </p>
         </div>
         <Button variant="outline" onClick={() => setAll(!all)}>
-          {all ? "隐藏已验收" : "包含已验收"}
+          {all ? "隐藏已收尾" : "包含已收尾"}
         </Button>
       </header>
       {!selectedCompanyId && <p>请先选择工作区。</p>}
@@ -49,7 +50,7 @@ export function Requirements() {
       )}
       {query.isSuccess && !batches.length && (
         <p className="text-muted-foreground">
-          暂无{all ? "" : "未验收的"}需求。通过 paperclip-planner skill
+          暂无{all ? "" : "未收尾的"}需求。通过 paperclip-planner skill
           发布后，会出现在这里。
         </p>
       )}
@@ -141,6 +142,32 @@ export function RequirementDetail() {
         <summary className="cursor-pointer font-medium">需求说明</summary>
         <MarkdownBody className="mt-4">{batch.config.requirement}</MarkdownBody>
       </details>
+      {batch.state.closure && (
+        <div className="rounded-lg bg-muted p-4 text-sm">
+          <p>
+            {poolStatusLabels[batch.state.closure.status]}：
+            {batch.state.closure.reason}
+          </p>
+          {batch.state.closure.replacement && (
+            <a className="underline" href={batch.state.closure.replacement}>
+              查看替代任务
+            </a>
+          )}
+        </div>
+      )}
+      {chosen?.closure && (
+        <div className="rounded-lg bg-muted p-4 text-sm">
+          <p>
+            {chosen.title} · {taskStatusLabels[chosen.closure.status]}：
+            {chosen.closure.reason}
+          </p>
+          {chosen.closure.replacement && (
+            <a className="underline" href={chosen.closure.replacement}>
+              查看替代任务
+            </a>
+          )}
+        </div>
+      )}
       {batch.state.status === "ready_for_review" && (
         <p className="rounded-lg bg-muted p-4">
           所有任务已交付，等待 Codex / Claude Code 独立验收。尚未合并。

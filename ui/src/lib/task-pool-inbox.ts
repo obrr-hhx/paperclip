@@ -15,7 +15,8 @@ export function poolInboxState(batches: TaskPoolBatch[]) {
       for (const attempt of task.attempts)
         if (attempt.runId) runIds.add(attempt.runId);
     }
-    if (batch.state.status === "accepted") continue;
+    if (["accepted", "closed", "superseded"].includes(batch.state.status))
+      continue;
     if (batch.state.status === "ready_for_review") {
       notices.push({
         batch,

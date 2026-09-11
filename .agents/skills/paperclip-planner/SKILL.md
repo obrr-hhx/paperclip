@@ -64,3 +64,17 @@ Use `POST task-pool/BATCH_ID/actions` with `{"action":"bind_planner","notificati
 Paperclip queues a message once per current actionable event and recipient. Idle threads start automatically; busy threads process it after their current turn. Closing the client window does not stop delivery if the thread remains loaded in the backend. No daemon start or thread resume is performed. A closed local session, unavailable endpoint or unloaded WebSocket thread is skipped; resume manually and inspect Inbox. Rebinding to another target can notify that target of a still-current event.
 
 Inbox `plannerNotification.status` records `submitted`, `skipped`, `failed`, or `attempting`. Submitted means the queue accepted the message, not that review finished. An ambiguous delivery or crash is not automatically retried, avoiding duplicate model turns. Notifications never grant merge/deploy authority. On receipt, read current server state before diagnosis or acceptance; old events may have been superseded.
+
+## Close or supersede work
+
+Use the task-pool API to change lifecycle status; do not edit discovery files or generic issue status. Within authorized scope, a planner may autonomously submit:
+
+```json
+{"action":"set_status","status":"closed","reason":"Requirement withdrawn"}
+```
+
+```json
+{"action":"set_status","status":"superseded","taskKey":"blocked_task","reason":"Completed and reviewed in the replacement task","replacement":"http://127.0.0.1:3112/DUR/requirements/REPLACEMENT_ID"}
+```
+
+Send these with `scripts/pool.py POST task-pool/BATCH_ID/actions --url http://127.0.0.1:3112`, JSON on stdin. Omit `taskKey` to close the entire requirement and its unfinished children. Superseded requires a replacement URL. Inspect the replacement's actual evidence before stating it was accepted. Closure preserves execution history and records reason, actor, time and replacement; it does not mean acceptance. Running/reserved attempts cause a conflict: pause and allow execution to finish first. Terminal work cannot be reopened through this operation. Closing a requirement stops scheduling and planner reminders. Use `sync` to refresh discovery files immediately, then read the current API state to verify.

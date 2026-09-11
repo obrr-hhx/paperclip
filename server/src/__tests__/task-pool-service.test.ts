@@ -44,6 +44,34 @@ describe("durable task pool", () => {
     });
     return { calls, wakeup, inspectPoolExecution: vi.fn(async () => "owned" as const), cancelRun: vi.fn() };
   }
+  it("lets planners close or supersede requirements and children without fabricating success", async () => {
+    const batch = await create(); const svc = taskPoolService(db); const worker = executor();
+    await svc.action(batch.id, { action: "set_status", status: "superseded", taskKey: "a", reason: "Replaced", replacement: "https://example.com/tasks/42" }, "user:planner");
+    let current = (await svc.get(batch.id))!;
+    expect(current.state.tasks[0].status).toBe("superseded");
+    expect(current.state.tasks[0].closure?.owner).toBe("user:planner");
+    expect(current.state.tasks[0].attempts).toEqual([]);
+    await svc.action(batch.id, { action: "set_status", status: "closed", reason: "No longer needed" }, "user:planner");
+    await svc.tick(worker);
+    current = (await svc.get(batch.id))!;
+    expect(current.state.status).toBe("closed");
+    expect(current.state.tasks.map((t) => t.status)).toEqual(["superseded", "closed", "closed"]);
+    expect(current.state.events.some((e) => e.type === "accepted")).toBe(false);
+    expect(worker.wakeup).not.toHaveBeenCalled();
+    await expect(svc.action(batch.id, { action: "resume" }, "user:planner")).rejects.toThrow();
+    await svc.sync(batch.id);
+  });
+  it("rejects missing replacements, unknown tasks, and closure of leased work", async () => {
+    const batch = await create([task("close_guard")]); const svc = taskPoolService(db);
+    await expect(svc.action(batch.id, { action: "set_status", status: "superseded", reason: "Replaced" }, "user:planner")).rejects.toThrow("replacement");
+    await expect(svc.action(batch.id, { action: "set_status", status: "closed", taskKey: "missing", reason: "Removed" }, "user:planner")).rejects.toThrow("Task key");
+    await svc.action(batch.id, { action: "publish" }, "user:planner");
+    await svc.tick(executor());
+    await expect(svc.action(batch.id, { action: "set_status", status: "closed", reason: "Removed" }, "user:planner")).rejects.toThrow("running attempts");
+    expect((await svc.get(batch.id))!.state.status).toBe("active");
+    const worker = executor(); await svc.tick(worker); await svc.tick(worker);
+    await svc.action(batch.id, { action: "set_status", status: "closed", reason: "Fixture complete" }, "user:planner");
+  });
   it("persists planner rebinding and unbinding without changing workflow state", async () => {
     const batch = await create([task("binding")]);
     const notification = { provider: "codex" as const, endpoint: "ws://127.0.0.1:39281", threadId: randomUUID() };

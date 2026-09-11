@@ -52,7 +52,7 @@ export function taskPoolRoutes(db: Db) {
     await manage(req, batch.companyId);
     const actor = getActorInfo(req);
     const updated = (await svc.action(batch.id, req.body, `${actor.actorType}:${actor.actorId}`))!;
-    await logActivity(db, { companyId: batch.companyId, actorType: actor.actorType, actorId: actor.actorId, action: `task_pool.${req.body.action}`, entityType: "issue", entityId: batch.issueId, details: { batchId: batch.id, generation: updated.state.generation } });
+    await logActivity(db, { companyId: batch.companyId, actorType: actor.actorType, actorId: actor.actorId, action: `task_pool.${req.body.action}`, entityType: "issue", entityId: batch.issueId, details: { batchId: batch.id, generation: updated.state.generation, ...(req.body.action === "set_status" ? { status: req.body.status, taskKey: req.body.taskKey, reason: req.body.reason, replacement: req.body.replacement } : {}) } });
     res.json(req.body.action === "claim_review" ? updated : view(updated));
   });
   return router;
