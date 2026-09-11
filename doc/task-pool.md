@@ -86,6 +86,14 @@ A successful process must also produce a valid result file and an allowed patch.
 
 Notifications are durable inbox records. This version does not automatically inject messages into or start Codex/Claude conversations. The current planner can poll progress; a replacement conversation uses the skill to discover pending work and reconstruct the requirement, DAG, runs and exact candidate without the original transcript.
 
+## Board navigation
+
+The company sidebar exposes **需求** (`/:companyPrefix/requirements`), **任务**, and **执行记录** (`/:companyPrefix/executions`). Requirement details show dependency progress and retained attempts. Execution history can be filtered to active workers; each run opens a focused task view with recent activity, tool inputs/results, delivery notes, and worker-reported tests.
+
+The focused run route is `/:companyPrefix/executions/:runId`. Existing task-pool agent/run links redirect there. The task-boundary disclosure retains an advanced native run link with `?view=manage`; other agents retain their native pages. Process view filters routine round bookkeeping, while raw events remain available for diagnostics. The client retains a bounded log window; full run logs remain server-side.
+
+The board Inbox groups task-pool notifications by requirement. Ready candidates request independent review; blocked work or uncertain execution ownership requests attention. Superseded failed attempts remain in execution history rather than appearing as separate actionable failures. Use planner lifecycle actions to retry pool work; worker delivery and self-tests do not constitute acceptance.
+
 ## Verification
 
 `server/src/__tests__/task-pool-service.test.ts` exercises a real embedded PostgreSQL database and Git worktrees: concurrent scanners, dependent patches, pause/resume, bounded and explicit retries, missing/invalid delivery, commit-before-DB recovery, new-session claims, stale manifests and projection rebuild. `task-pool-routes.test.ts` checks tenant isolation, worker permissions and review capability visibility. Live model and forced-server-crash trial evidence is kept outside the repository.

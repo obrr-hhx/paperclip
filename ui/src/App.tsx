@@ -107,6 +107,10 @@ import { useStreamlinedUiEnabled } from "./hooks/useStreamlinedUiEnabled";
 import { cloudStackCreateUrl } from "./lib/cloudLinks";
 import { navigateTopLevel } from "@/lib/browserNavigation";
 
+const WorkerRun = lazy(() => import("./pages/WorkerRun").then(m => ({ default: m.WorkerRun })));
+const Requirements = lazy(() => import("./pages/Requirements").then(m => ({ default: m.Requirements })));
+const RequirementDetail = lazy(() => import("./pages/Requirements").then(m => ({ default: m.RequirementDetail })));
+const Executions = lazy(() => import("./pages/Executions").then(m => ({ default: m.Executions })));
 const CompanyExport = lazy(() =>
   import("./pages/CompanyExport").then((module) => ({ default: module.CompanyExport })),
 );
@@ -266,7 +270,7 @@ function boardRoutes(streamlinedUiEnabled: boolean) {
       <Route path="agents/new" element={<NewAgent />} />
       <Route path="agents/:agentId" element={<AgentDetail />} />
       <Route path="agents/:agentId/:tab" element={<AgentDetail />} />
-      <Route path="agents/:agentId/runs/:runId" element={<AgentDetail />} />
+      <Route path="agents/:agentId/runs/:runId" element={<WorkerRun />} />
       <Route path="projects" element={<Projects />} />
       <Route path="projects/:projectId" element={<ProjectDetail />} />
       <Route path="projects/:projectId/overview" element={<ProjectDetail />} />
@@ -281,6 +285,10 @@ function boardRoutes(streamlinedUiEnabled: boolean) {
       <Route element={<IsolatedWorkspacesRouteGate />}>
         <Route path="workspaces" element={<Workspaces />} />
       </Route>
+      <Route path="requirements" element={<Requirements />} />
+      <Route path="requirements/:batchId" element={<RequirementDetail />} />
+      <Route path="executions" element={<Executions />} />
+      <Route path="executions/:runId" element={<WorkerRun />} />
       <Route path="issues" element={<Issues />} />
       <Route path="tasks" element={<Navigate to="/issues" replace />} />
       <Route path="search" element={<Search />} />
@@ -744,6 +752,10 @@ export function App() {
           <Route path="instance/settings" element={<LegacySettingsRedirect />} />
           <Route path="instance/settings/*" element={<LegacySettingsRedirect />} />
           <Route path="companies" element={<UnprefixedBoardRedirect />} />
+          <Route path="requirements" element={<UnprefixedBoardRedirect />} />
+          <Route path="requirements/:batchId" element={<UnprefixedBoardRedirect />} />
+          <Route path="executions" element={<UnprefixedBoardRedirect />} />
+          <Route path="executions/:runId" element={<UnprefixedBoardRedirect />} />
           <Route path="issues" element={<UnprefixedBoardRedirect />} />
           <Route path="tasks" element={<UnprefixedBoardRedirect />} />
           <Route path="issues/:issueId" element={<UnprefixedBoardRedirect />} />

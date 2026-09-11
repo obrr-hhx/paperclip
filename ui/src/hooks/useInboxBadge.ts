@@ -1,3 +1,5 @@
+import { useTaskPoolInbox } from "./useTaskPoolInbox";
+import { isPoolInboxRun } from "../lib/task-pool-inbox";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { accessApi } from "../api/access";
@@ -258,18 +260,22 @@ export function useInboxBadge(companyId: string | null | undefined) {
     staleTime: INBOX_BADGE_HOT_PATH_STALE_MS,
   });
 
+  const poolInbox = useTaskPoolInbox(companyId);
+
   return useMemo(
-    () =>
-      computeInboxBadgeData({
+    () => {
+      const badge = computeInboxBadgeData({
         approvals,
         joinRequests,
         dashboard,
-        heartbeatRuns,
-        mineIssues,
+        heartbeatRuns: heartbeatRuns.filter(r => !isPoolInboxRun(r, poolInbox.runIds)),
+        mineIssues: mineIssues.filter(i => !poolInbox.issueIds.has(i.id)),
         dismissedAlerts,
         dismissedAtByKey,
         currentUserId,
-      }),
-    [approvals, joinRequests, dashboard, heartbeatRuns, mineIssues, dismissedAlerts, dismissedAtByKey, currentUserId],
+      });
+      return { ...badge, inbox: badge.inbox + poolInbox.notices.length, failedRuns: badge.failedRuns + poolInbox.notices.filter(n => n.kind === "attention").length };
+    },
+    [approvals, joinRequests, dashboard, heartbeatRuns, mineIssues, dismissedAlerts, dismissedAtByKey, currentUserId, poolInbox.notices, poolInbox.runIds, poolInbox.issueIds],
   );
 }

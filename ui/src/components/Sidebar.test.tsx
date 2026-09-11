@@ -129,7 +129,7 @@ async function flushReact() {
 describe("Sidebar", () => {
   let container: HTMLDivElement;
 
-  async function renderSidebar() {
+  async function renderSidebar(expandSecondary = true) {
     const root = createRoot(container);
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -145,7 +145,13 @@ describe("Sidebar", () => {
       );
     });
     await flushReact();
-
+    if (expandSecondary) {
+      for (const label of ["更多工具", "配置与管理"]) {
+        const toggle = container.querySelector<HTMLButtonElement>(`button[aria-label="Expand ${label}"]`);
+        if (toggle) flushSync(() => toggle.click());
+      }
+      await flushReact();
+    }
     return root;
   }
 
@@ -164,6 +170,18 @@ describe("Sidebar", () => {
     container.remove();
     document.body.innerHTML = "";
     vi.clearAllMocks();
+  });
+
+
+  it("shows requirements, tasks and executions while secondary tools start collapsed", async () => {
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({});
+    const root = await renderSidebar(false);
+    const links = [...container.querySelectorAll("nav a")].map(a => a.getAttribute("href"));
+    expect(links).toEqual(expect.arrayContaining(["/requirements", "/issues", "/executions"]));
+    expect(links).not.toContain("/agents");
+    expect(links).not.toContain("/routines");
+    expect(container.querySelector('[data-testid="sidebar-agents"]')).toBeNull();
+    flushSync(() => root.unmount());
   });
 
   it("keeps the default sidebar edge borderless", async () => {
@@ -211,11 +229,11 @@ describe("Sidebar", () => {
     // The Work section is a Collapsible now (one extra wrapper level), so
     // resolve the section root by walking up until the header label appears.
     let workSectionContainer = workSection?.parentElement ?? null;
-    while (workSectionContainer && !workSectionContainer.textContent?.includes("Work")) {
+    while (workSectionContainer && !workSectionContainer.textContent?.includes("更多工具")) {
       workSectionContainer = workSectionContainer.parentElement;
     }
-    expect(workSectionContainer?.textContent).toContain("Work");
-    expect(workSectionContainer?.textContent).toContain("Tasks");
+    expect(workSectionContainer?.textContent).toContain("更多工具");
+    expect(workSectionContainer?.textContent).not.toContain("执行记录");
     expect(workSectionContainer?.textContent).not.toContain("Goals");
 
     flushSync(() => {
@@ -234,7 +252,7 @@ describe("Sidebar", () => {
     expect(container.textContent).not.toContain("New Issue");
 
     const navLabels = [...container.querySelectorAll("nav a")].map((a) => a.textContent?.trim());
-    expect(navLabels).toContain("Tasks");
+    expect(navLabels).toContain("任务");
     expect(navLabels).not.toContain("Issues");
 
     const projectsLink = [...container.querySelectorAll("nav a")].find((a) => a.textContent?.trim() === "Projects");
@@ -259,8 +277,8 @@ describe("Sidebar", () => {
 
     const navLabels = [...container.querySelectorAll("nav a")].map((a) => a.textContent?.trim());
     expect(navLabels).toContain("Projects");
-    expect(navLabels).toContain("Agents");
-    expect(container.textContent).not.toContain("Organization");
+    expect(navLabels).toContain("Worker 配置");
+    expect(container.textContent).toContain("配置与管理");
 
     flushSync(() => {
       root.unmount();
@@ -277,18 +295,18 @@ describe("Sidebar", () => {
     const root = await renderSidebar();
 
     const navLabels = [...container.querySelectorAll("nav a")].map((a) => a.textContent?.trim());
-    expect(navLabels).toContain("Tasks");
+    expect(navLabels).toContain("任务");
     // Top-level Projects link + starred children stay, per-project collapsible gone.
     expect(navLabels).toContain("Projects");
     expect(container.querySelector('[data-testid="sidebar-starred-projects"]')).not.toBeNull();
-    expect(navLabels).toContain("Agents");
+    expect(navLabels).toContain("Worker 配置");
 
     flushSync(() => {
       root.unmount();
     });
   });
 
-  it("restores legacy agent and organization navigation when Streamlined UI is off", async () => {
+  it("keeps worker configuration without the temporary worker roster when Streamlined UI is off", async () => {
     mockInstanceSettingsApi.getExperimental.mockResolvedValue({
       enableStreamlinedUi: false,
       enableApps: true,
@@ -297,13 +315,13 @@ describe("Sidebar", () => {
 
     const labels = [...container.querySelectorAll("nav a")].map((anchor) => anchor.textContent?.trim());
     expect(container.querySelector('[data-testid="sidebar-recent-tasks"]')).toBeNull();
-    expect(container.querySelector('[data-testid="sidebar-projects"]')).not.toBeNull();
-    expect(container.querySelector('[data-testid="sidebar-agents"]')?.getAttribute("data-streamlined")).toBe("undefined");
-    expect(container.textContent).toContain("Organization");
+    expect(container.querySelector('[data-testid="sidebar-projects"]')).toBeNull();
+    expect(container.querySelector('[data-testid="sidebar-agents"]')).toBeNull();
+    expect(container.textContent).toContain("配置与管理");
     expect(labels).toEqual(expect.arrayContaining(["Org", "Connectors", "Timeline", "Costs", "Activity", "Settings"]));
     expect(labels).not.toContain("Audit");
     expect(labels).not.toContain("Projects");
-    expect(container.querySelector('a[href="/agents"]')).toBeNull();
+    expect(container.querySelector('a[href="/agents"]')).not.toBeNull();
     expect(container.querySelector("aside")?.classList).toContain("border-r");
 
     flushSync(() => {
@@ -331,9 +349,9 @@ describe("Sidebar", () => {
     const sidebarSlot = [...container.querySelectorAll("nav [data-plugin-slot-types]")]
       .find((node) => node.getAttribute("data-plugin-slot-types") === "sidebar");
     expect(sidebarSlot?.textContent).toContain("Plugin slot outlet");
-    const workSectionContainer = sidebarSlot?.parentElement?.parentElement;
+    const workSectionContainer = [...container.querySelectorAll("nav > div")].find(section => section.textContent?.startsWith("更多工具"));
     const workText = workSectionContainer?.textContent ?? "";
-    expect(workText).toContain("Work");
+    expect(workText).toContain("更多工具");
     expect(workText).toContain("Workspaces");
     expect(workText.indexOf("Workspaces")).toBeLessThan(workText.indexOf("Plugin slot outlet"));
 
@@ -400,16 +418,16 @@ describe("Sidebar", () => {
     const root = await renderSidebar();
 
     const sections = [...container.querySelectorAll("nav > div")];
-    const workSection = sections.find((section) => section.textContent?.startsWith("Work"));
-    const orgSection = sections.find((section) => section.textContent?.startsWith("Org"));
+    const workSection = sections.find((section) => section.textContent?.startsWith("更多工具"));
+    const orgSection = sections.find((section) => section.textContent?.startsWith("配置与管理"));
     const labels = (section: Element | undefined) => [...(section?.querySelectorAll("a") ?? [])]
       .map((anchor) => anchor.textContent?.trim());
 
-    expect(labels(workSection)).toEqual(["Tasks", "Projects", "Routines", "Artifacts"]);
-    expect(labels(orgSection)).toEqual(["Agents", "Skills", "Connectors", "Audit"]);
+    expect(labels(workSection)).toEqual(["Projects", "Routines", "Artifacts"]);
+    expect(labels(orgSection)).toEqual(["Worker 配置", "Skills", "Connectors", "Audit"]);
     expect(sections.indexOf(workSection!)).toBeLessThan(sections.indexOf(orgSection!));
     expect(
-      workSection?.querySelector('a[href="/issues"] svg')?.classList.contains("lucide-circle-check"),
+      container.querySelector('a[href="/issues"] svg')?.classList.contains("lucide-list-checks"),
     ).toBe(true);
 
     flushSync(() => {
@@ -466,7 +484,7 @@ describe("Sidebar", () => {
     const root = await renderSidebar();
 
     const sections = [...container.querySelectorAll("nav > div")];
-    const workSection = sections.find((section) => section.textContent?.startsWith("Work"));
+    const workSection = sections.find((section) => section.textContent?.startsWith("更多工具"));
     expect(workSection?.textContent).toContain("Projects");
     expect(workSection?.textContent).not.toContain("Timeline");
     expect(container.querySelector('a[href="/timeline"]')).toBeNull();

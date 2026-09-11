@@ -1,7 +1,8 @@
 import {
+  ClipboardList,
+  Workflow,
   Inbox,
   ListChecks,
-  CircleDot,
   Target,
   LayoutDashboard,
   DollarSign,
@@ -25,8 +26,6 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { SidebarSection } from "./SidebarSection";
 import { SidebarNavItem } from "./SidebarNavItem.production";
-import { SidebarAgents } from "./SidebarAgents.production";
-import { SidebarProjects } from "./SidebarProjects";
 import { SidebarStarredProjects } from "./SidebarStarredProjects.production";
 import { useDialogActions } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
@@ -46,10 +45,9 @@ import { SidebarCompanyMenu } from "./SidebarCompanyMenu.production";
 
 export function Sidebar() {
   const { openNewIssue } = useDialogActions();
-  // Every labeled section is collapsible (session-scoped, default open) —
-  // one policy across static nav groups and the data-driven sections.
-  const [workOpen, setWorkOpen] = useState(true);
-  const [companyOpen, setCompanyOpen] = useState(true);
+  // Keep task-pool navigation visible; secondary tools start collapsed.
+  const [workOpen, setWorkOpen] = useState(false);
+  const [companyOpen, setCompanyOpen] = useState(false);
   const { selectedCompanyId, selectedCompany } = useCompany();
   const { collapsed, peeking } = useSidebar();
   const rail = collapsed && !peeking;
@@ -179,8 +177,13 @@ export function Sidebar() {
           ) : null}
         </div>
 
-        <SidebarSection label="Work" collapsible={{ open: workOpen, onOpenChange: setWorkOpen }}>
-          <SidebarNavItem to="/issues" label="Tasks" icon={CircleDot} />
+        <SidebarSection label="任务池">
+          <SidebarNavItem to="/requirements" label="需求" icon={ClipboardList} />
+          <SidebarNavItem to="/issues" label="任务" icon={ListChecks} />
+          <SidebarNavItem to="/executions" label="执行记录" icon={Workflow} liveCount={liveRunCount} />
+        </SidebarSection>
+
+        <SidebarSection label="更多工具" collapsible={{ open: workOpen, onOpenChange: setWorkOpen }}>
           {showCases ? (
             <SidebarNavItem to="/cases" label="Cases" icon={Layers} textBadge="beta" />
           ) : null}
@@ -223,13 +226,13 @@ export function Sidebar() {
           />
         </SidebarSection>
 
-        {/* Classic mode restores the per-project collapsible below Work. */}
-        {streamlined ? null : <SidebarProjects />}
 
-        <SidebarAgents streamlined={streamlined} />
 
-        <SidebarSection label="Company" collapsible={{ open: companyOpen, onOpenChange: setCompanyOpen }}>
-          <SidebarNavItem to="/org" label="Org" icon={Network} />
+
+
+        <SidebarSection label="配置与管理" collapsible={{ open: companyOpen, onOpenChange: setCompanyOpen }}>
+          <SidebarNavItem to="/agents" label="Worker 配置" icon={Workflow} />
+              <SidebarNavItem to="/org" label="Org" icon={Network} />
           {showApps ? <SidebarNavItem to="/apps" label="Connectors" icon={Unplug} /> : null}
           <SidebarNavItem to="/timeline" label="Timeline" icon={GanttChartSquare} />
           <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />

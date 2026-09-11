@@ -1,3 +1,5 @@
+import { useTaskPoolInbox } from "../hooks/useTaskPoolInbox";
+import { isPoolInboxRun } from "../lib/task-pool-inbox";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -1196,13 +1198,14 @@ function StreamlinedInbox() {
       return a.label.localeCompare(b.label);
     });
   }, [agents, currentUserId, mineIssues, touchedIssues]);
+  const poolInbox = useTaskPoolInbox(selectedCompanyId);
+  const poolNotices = poolInbox.notices.filter(n => !normalizedSearchQuery || `${n.batch.config.title} ${n.reason}`.toLowerCase().includes(normalizedSearchQuery.toLowerCase()));
   const issuesToRender = useMemo(
     () => {
-      if (tab === "mine") return visibleMineIssues;
-      if (tab === "unread") return unreadTouchedIssues;
-      return visibleTouchedIssues;
+      const source = tab === "mine" ? visibleMineIssues : tab === "unread" ? unreadTouchedIssues : visibleTouchedIssues;
+      return source.filter(issue => !poolInbox.issueIds.has(issue.id));
     },
-    [tab, visibleMineIssues, visibleTouchedIssues, unreadTouchedIssues],
+    [tab, visibleMineIssues, visibleTouchedIssues, unreadTouchedIssues, poolInbox.issueIds],
   );
 
   const agentById = useMemo(() => {
@@ -1302,9 +1305,9 @@ function StreamlinedInbox() {
   const failedRuns = useMemo(
     () =>
       getLatestFailedRunsByAgent(heartbeatRuns ?? []).filter(
-        (r) => !isInboxEntityDismissed(dismissedAtByKey, `run:${r.id}`, r.createdAt),
+        (r) => !isPoolInboxRun(r, poolInbox.runIds) && !isInboxEntityDismissed(dismissedAtByKey, `run:${r.id}`, r.createdAt),
       ),
-    [heartbeatRuns, dismissedAtByKey],
+    [heartbeatRuns, dismissedAtByKey, poolInbox.runIds],
   );
   const approvalsToRender = useMemo(() => {
     let filtered = getApprovalsForTab(approvals ?? [], tab, allApprovalFilter, currentUserId);
@@ -1789,6 +1792,7 @@ function StreamlinedInbox() {
 
   const retryRunMutation = useMutation({
     mutationFn: async (run: HeartbeatRun) => {
+      if (isPoolInboxRun(run, poolInbox.runIds)) throw new Error("请在对应需求中通过任务池处理重试。");
       const payload: Record<string, unknown> = {};
       const context = run.contextSnapshot as Record<string, unknown> | null;
       if (context) {
@@ -2711,11 +2715,25 @@ function StreamlinedInbox() {
         </div>
       ) : null}
 
+      {poolInbox.error && <p role="alert" className="mx-4 my-3 text-sm text-destructive">需求待办读取失败，当前 Inbox 可能不完整：{String(poolInbox.error)}</p>}
+      {tab !== "blocked" && poolNotices.length > 0 && (
+        <section className="mx-4 my-4 space-y-2" aria-label="需求待处理">
+          <h2 className="text-sm font-semibold">需求待处理 · {poolNotices.length}</h2>
+          {poolNotices.map(n => (
+            <Link key={n.batch.id} to={`/requirements/${n.batch.id}`} className="block rounded-lg border border-border p-4 hover:bg-accent">
+              <div className="flex flex-wrap justify-between gap-2"><span className="font-medium">{n.batch.config.title}</span><span className="text-sm text-muted-foreground">{n.kind === "review" ? "等待验收" : "需要介入"}</span></div>
+              <p className="mt-2 text-sm text-muted-foreground">{n.reason}</p>
+              <p className="mt-2 text-sm underline">{n.kind === "review" ? "查看需求与验收候选" : "查看任务、失败原因与处理上下文"}</p>
+            </Link>
+          ))}
+        </section>
+      )}
+
       {tab !== "blocked" && !allLoaded && visibleSections.length === 0 && (
         <PageSkeleton variant="inbox" />
       )}
 
-      {tab !== "blocked" && allLoaded && visibleSections.length === 0 && (
+      {tab !== "blocked" && allLoaded && !poolInbox.loading && !poolInbox.error && poolNotices.length === 0 && visibleSections.length === 0 && (
         <EmptyState
           icon={searchQuery.trim() ? Search : InboxIcon}
           message={

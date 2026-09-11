@@ -12,6 +12,8 @@ const BOARD_ROUTE_ROOTS = new Set([
   "execution-workspaces",
   "issues",
   "tasks",
+  "requirements",
+  "executions",
   "routines",
   "goals",
   "artifacts",
