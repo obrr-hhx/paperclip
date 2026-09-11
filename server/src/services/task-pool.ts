@@ -114,11 +114,15 @@ export function taskPoolService(db: Db, now: () => number = Date.now) {
         state.status = "paused";
       } else if (input.action === "resume") {
         if (!["paused", "needs_attention"].includes(state.status)) throw conflict("Batch is not paused or blocked");
-        for (const task of state.tasks) if (task.status === "blocked") {
-          if (task.attempts.length >= (task.retryLimit ?? batch.config.maxAttempts)) throw conflict("Attempts exhausted; diagnose the failure and use retry_task with corrective feedback");
-          task.status = "pending";
+        const exhausted = state.tasks.some((task) => task.status === "blocked" && task.attempts.length >= (task.retryLimit ?? batch.config.maxAttempts));
+        if (exhausted) {
+          if (state.status !== "paused") throw conflict("Attempts exhausted; diagnose the failure and use retry_task with corrective feedback");
+          state.status = "needs_attention";
+          event(batch, "needs_attention", "Execution failed while paused; diagnose and explicitly grant a retry");
+        } else {
+          for (const task of state.tasks) if (task.status === "blocked") task.status = "pending";
+          state.status = "active";
         }
-        state.status = "active";
       } else if (input.action === "retry_task") {
         const task = state.tasks.find((t) => t.key === input.taskKey);
         if (state.status !== "needs_attention" || task?.status !== "blocked") throw conflict("Only a blocked task in a needs-attention batch can be retried");
@@ -146,7 +150,7 @@ export function taskPoolService(db: Db, now: () => number = Date.now) {
         }
         delete state.review;
       }
-      await tx.update(issues).set({ description: batchDescription(batch), status: ["closed", "superseded"].includes(state.status) ? "cancelled" : state.status === "accepted" ? "done" : state.status === "ready_for_review" ? "in_review" : "in_progress", updatedAt: new Date() }).where(eq(issues.id, batch.issueId));
+      await tx.update(issues).set({ description: batchDescription(batch), status: ["closed", "superseded"].includes(state.status) ? "cancelled" : state.status === "accepted" ? "done" : state.status === "ready_for_review" ? "in_review" : state.status === "needs_attention" ? "blocked" : "in_progress", updatedAt: new Date() }).where(eq(issues.id, batch.issueId));
     });
     return get(id);
   }

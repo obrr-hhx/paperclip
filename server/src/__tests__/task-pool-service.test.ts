@@ -72,6 +72,23 @@ describe("durable task pool", () => {
     const worker = executor(); await svc.tick(worker); await svc.tick(worker);
     await svc.action(batch.id, { action: "set_status", status: "closed", reason: "Fixture complete" }, "user:planner");
   });
+  it("releases a deployment pause into attention when execution exhausted retries", async () => {
+    const batch = await create([task("paused_failure")]); const svc = taskPoolService(db);
+    batch.config.maxAttempts = 1;
+    await db.update(taskPoolBatches).set({ config: batch.config }).where(eq(taskPoolBatches.id, batch.id));
+    const worker = executor(true);
+    await svc.action(batch.id, { action: "publish" }, "user:planner");
+    await svc.tick(worker); await svc.tick(worker);
+    await svc.action(batch.id, { action: "pause" }, "user:planner");
+    await svc.tick(worker);
+    const before = (await svc.get(batch.id))!;
+    expect(before.state.status).toBe("paused"); expect(before.state.tasks[0].status).toBe("blocked");
+    const resumed = (await svc.action(batch.id, { action: "resume" }, "user:planner"))!;
+    expect(resumed.state.status).toBe("needs_attention");
+    expect(resumed.state.tasks).toEqual(before.state.tasks);
+    expect(resumed.state.events.at(-1)?.type).toBe("needs_attention");
+    await expect(svc.action(batch.id, { action: "resume" }, "user:planner")).rejects.toThrow("Attempts exhausted");
+  });
   it("persists planner rebinding and unbinding without changing workflow state", async () => {
     const batch = await create([task("binding")]);
     const notification = { provider: "codex" as const, endpoint: "ws://127.0.0.1:39281", threadId: randomUUID() };
