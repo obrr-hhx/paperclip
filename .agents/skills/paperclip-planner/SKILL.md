@@ -20,7 +20,7 @@ Use the included `scripts/pool.py` to call the native task-pool HTTP API. It onl
 Create a draft through `POST /companies/:companyId/task-pool` with:
 - title, requirement (agreed goal, decisions, exclusions and overall acceptance)
 - repository (server-local absolute Git checkout), baseRef, templateAgentId
-- optional projectId, originSession, concurrency (1–4), maxAttempts (1–3)
+- optional projectId, originSession, concurrency (1–4), maxAttempts (1–3), leaseSec (30–3600, default 120), retryDelaySec (1–3600, default 30)
 - tasks: key, title, instructions, allowedPaths, acceptance[], dependsOn[]
 
 Allowed paths are exact files or directory prefixes ending in `/`. Each task must be independently executable. Dependencies are structural keys, not prose. Downstream tasks receive the transitive dependency commits in their worktree. Tell workers what to self-test, but do not equate their self-reports with acceptance.
@@ -30,6 +30,10 @@ Publish the whole draft with `POST /task-pool/:id/actions` and `{"action":"publi
 ## Progress and interventions
 
 `GET /task-pool/:id` returns current state. `POST /task-pool/:id/sync` rebuilds public files. `pause` stops new dispatch; running work may finish. `resume` releases a pause, but does not reset exhausted retry budgets. For an exhausted task, use `{"action":"retry_task","taskKey":"...","feedback":"concrete corrective direction"}`. This explicitly grants one additional attempt, advances the requirement generation, and preserves all prior attempts. Do not loop this action automatically; diagnose the blocker first.
+
+Pool workers have no wall-clock execution cap. The execution host renews the durable attempt lease while it owns execution, including silent thinking or long tools. An expired lease alone never authorizes a second worker: prior execution must be confirmed stopped. `attempt.lease.recoveryError` and inbox notices identify uncertain ownership needing reconciliation. Do not force retry while the previous worker may still be alive.
+
+Automatic retries respect maxAttempts and persist `task.retryAt` with exponential backoff (30s, 60s by default, capped at one hour). Each attempt has its own worker, run and worktree; previous checkouts and failure context remain available. Exhaustion requires a diagnosed, explicit retry grant. Lease health is not a proof of useful model progress; inspect trace when a live worker appears stuck.
 
 Task cards and native agent/run pages retain execution history. Pool card status is server-maintained; comments are allowed, generic task checkout/status updates are rejected. Worker success means delivery and self-tests only.
 
@@ -45,4 +49,18 @@ Accept using `{"action":"accept","token":"<claim token>","candidate":"<manifest 
 
 For defects, use `{"action":"rework","token":"<claim token>","candidate":"<manifest sha256>","feedback":"concrete failures","tasks":[...]}`. New task keys must be unique. Explicitly depend on the relevant previous tasks to inherit their code. This creates a new generation and leaves previous execution evidence intact. A prior candidate verdict cannot accept the new generation.
 
-Notifications are durable local projections, not proof that a Codex/Claude conversation has been woken. This version does not auto-resume a closed conversation. At the next relevant conversation, discover pending requirements and take over explicitly.
+## Best-effort Codex notifications
+
+Bind the exact Codex thread ID. The client defaults to the native local queue (`endpoint: "local"`); `CODEX_THREAD_ID` attaches the current planner when creating requirements. An explicit `PAPERCLIP_CODEX_NOTIFY_ENDPOINT` may select an already-running loopback app-server WebSocket endpoint. Do not start another server or resume another copy of the thread to manufacture connectivity.
+
+To bind or replace an existing requirement target:
+
+```sh
+python3 scripts/pool.py bind task-pool/BATCH_ID/actions --url http://127.0.0.1:3112 --notify-thread THREAD_UUID
+```
+
+Use `POST task-pool/BATCH_ID/actions` with `{"action":"bind_planner","notification":null}` to disable. Binding requires the same planner permissions as publishing. Local delivery uses `codex queue` only when a Codex process still holds the exact session rollout. It requires lsof/ps and the local Codex installation (override its executable with server setting PAPERCLIP_CODEX_COMMAND). A WebSocket endpoint must be loopback `ws://` with a port and no credentials. The local process check and queue insertion are not atomic: a concurrent exit can leave a queued message for later resume. Claude Code needs its own adapter; use durable Inbox there.
+
+Paperclip queues a message once per current actionable event and recipient. Idle threads start automatically; busy threads process it after their current turn. Closing the client window does not stop delivery if the thread remains loaded in the backend. No daemon start or thread resume is performed. A closed local session, unavailable endpoint or unloaded WebSocket thread is skipped; resume manually and inspect Inbox. Rebinding to another target can notify that target of a still-current event.
+
+Inbox `plannerNotification.status` records `submitted`, `skipped`, `failed`, or `attempting`. Submitted means the queue accepted the message, not that review finished. An ambiguous delivery or crash is not automatically retried, avoiding duplicate model turns. Notifications never grant merge/deploy authority. On receipt, read current server state before diagnosis or acceptance; old events may have been superseded.

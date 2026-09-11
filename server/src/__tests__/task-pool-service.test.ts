@@ -42,8 +42,92 @@ describe("durable task pool", () => {
       const [run] = await db.insert(heartbeatRuns).values({ companyId: agent!.companyId, agentId, invocationSource: "automation", status: fail || key === failKey ? "failed" : "succeeded", finishedAt: new Date(), exitCode: fail ? 1 : 0 }).returning();
       return run!;
     });
-    return { calls, wakeup };
+    return { calls, wakeup, inspectPoolExecution: vi.fn(async () => "owned" as const), cancelRun: vi.fn() };
   }
+  it("persists planner rebinding and unbinding without changing workflow state", async () => {
+    const batch = await create([task("binding")]);
+    const notification = { provider: "codex" as const, endpoint: "ws://127.0.0.1:39281", threadId: randomUUID() };
+    await taskPoolService(db).action(batch.id, { action: "bind_planner", notification }, "user:planner");
+    const rebound = (await taskPoolService(db).get(batch.id))!;
+    expect(rebound.config.plannerNotification).toEqual(notification);
+    expect(rebound.state).toEqual(batch.state);
+    await taskPoolService(db).action(batch.id, { action: "bind_planner", notification: null }, "user:planner");
+    expect((await taskPoolService(db).get(batch.id))!.config.plannerNotification).toBeUndefined();
+  });
+  it("renews a silent owned execution beyond the old 30-minute cap, then reclaims and retries only after stop", async () => {
+    const batch = await create([task("leased"), task("after", ["leased"])]);
+    let clock = Date.now(); const svc = taskPoolService(db, () => clock);
+    let health: "owned" | "stopped" | "unverified" = "owned";
+    const wakeup = vi.fn(async (agentId: string) => {
+      const [agent] = await db.select().from(agents).where(eq(agents.id, agentId));
+      expect(agent.adapterConfig.timeoutSec).toBe(0);
+      return (await db.insert(heartbeatRuns).values({ companyId: batch.companyId, agentId, invocationSource: "automation", status: "running", startedAt: new Date(clock) }).returning())[0]!;
+    });
+    const worker = { wakeup, inspectPoolExecution: vi.fn(async () => health), cancelRun: vi.fn(async (id: string) => {
+      return (await db.update(heartbeatRuns).set({ status: "cancelled", error: "Lease expired", finishedAt: new Date(clock) }).where(eq(heartbeatRuns.id, id)).returning())[0]!;
+    }) };
+    await svc.action(batch.id, { action: "publish" }, "user:planner");
+    await svc.tick(worker); await svc.tick(worker);
+    for (let i = 0; i < 40; i++) { clock += 60000; await svc.tick(worker); }
+    let current = (await svc.get(batch.id))!;
+    expect(wakeup).toHaveBeenCalledTimes(1);
+    expect(Date.parse(current.state.tasks[0].attempts[0].lease!.expiresAt)).toBeGreaterThan(clock);
+    // A different service instance cannot equate lease expiry with process death.
+    health = "unverified"; clock += 180000;
+    await taskPoolService(db, () => clock).tick(worker);
+    expect(worker.cancelRun).not.toHaveBeenCalled();
+    current = (await svc.get(batch.id))!;
+    expect(current.state.tasks[0].attempts[0].lease!.recoveryError).toContain("unverified");
+    expect(current.state.tasks[1].attempts).toHaveLength(0);
+    // Failed health probes must not release the slot or spend retry budget.
+    worker.inspectPoolExecution.mockRejectedValueOnce(new Error("probe unavailable"));
+    await svc.tick(worker);
+    expect((await svc.get(batch.id))!.state.tasks[0].attempts).toHaveLength(1);
+    health = "stopped";
+    await svc.tick(worker); expect(worker.cancelRun).toHaveBeenCalledTimes(1);
+    await svc.tick(worker);
+    current = (await svc.get(batch.id))!;
+    expect(current.state.tasks[0].status).toBe("pending");
+    expect(Date.parse(current.state.tasks[0].retryAt!)).toBe(clock + 30000);
+    await svc.tick(worker); expect(wakeup).toHaveBeenCalledTimes(1);
+    clock += 30000;
+    await Promise.all([svc.tick(worker), taskPoolService(db, () => clock).tick(worker)]);
+    await svc.tick(worker);
+    current = (await svc.get(batch.id))!;
+    expect(current.state.tasks[0].attempts).toHaveLength(2);
+    expect(current.state.tasks[0].attempts[0].status).toBe("failed");
+    expect(current.state.tasks[0].attempts[1].cwd).not.toBe(current.state.tasks[0].attempts[0].cwd);
+    expect(wakeup).toHaveBeenCalledTimes(2);
+    expect(current.state.tasks[1].attempts).toHaveLength(0);
+    // Finish fixture execution so later tests' global scans do not inspect it.
+    await db.update(heartbeatRuns).set({ status: "failed" }).where(eq(heartbeatRuns.id, current.state.tasks[0].attempts[1].runId!));
+    await svc.tick(worker);
+  }, 30000);
+  it("runs a real silent process past its template timeout and collects its delivery", async () => {
+    const batch = await create([task("silent")]);
+    await db.update(companies).set({ defaultResponsibleUserId: "fixture-planner" }).where(eq(companies.id, batch.companyId));
+    await db.update(agents).set({ adapterConfig: { command: process.execPath, timeoutSec: 1, args: ["-e", `setTimeout(() => { const fs = require('fs'); fs.writeFileSync('silent.txt', 'done'); fs.writeFileSync(process.env.PAPERCLIP_POOL_RESULT, JSON.stringify({status:'completed',summary:'silent work finished',tests:['slept beyond template limit']})); }, 2100)`] } }).where(eq(agents.id, batch.config.templateAgentId));
+    const { heartbeatService } = await import("../services/heartbeat.js");
+    const heartbeat = heartbeatService(db);
+    const svc = taskPoolService(db);
+    await svc.action(batch.id, { action: "publish" }, "user:planner");
+    await svc.tick(heartbeat); await svc.tick(heartbeat);
+    const deadline = Date.now() + 20000;
+    let observedOwned = false;
+    let current = (await svc.get(batch.id))!;
+    while (Date.now() < deadline && current.state.status === "active") {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      await svc.tick(heartbeat);
+      current = (await svc.get(batch.id))!;
+      const a = current.state.tasks[0].attempts[0];
+      if (a?.runId && await heartbeat.inspectPoolExecution(a.runId, a.lease?.host) === "owned") observedOwned = true;
+    }
+    const observedRuns = await db.select({ status: heartbeatRuns.status, error: heartbeatRuns.error }).from(heartbeatRuns).where(eq(heartbeatRuns.companyId, batch.companyId));
+    await db.update(taskPoolBatches).set({ state: { ...current.state, status: "paused" } }).where(eq(taskPoolBatches.id, batch.id));
+    expect(observedOwned, JSON.stringify({ runs: observedRuns, errors: current.state.tasks.flatMap(t => t.attempts.map(a => a.error)) })).toBe(true);
+    expect(current.state.status).toBe("ready_for_review");
+    expect(current.state.tasks[0].attempts).toHaveLength(1);
+  }, 30000);
   it("rejects cycles, missing dependencies, duplicate keys and path-prefix escapes", () => {
     expect(() => orderPoolTasks([task("a", ["b"]), task("b", ["a"])])).toThrow("cycle");
     expect(() => orderPoolTasks([task("a", ["missing"])])).toThrow("Unknown");
@@ -84,9 +168,9 @@ describe("durable task pool", () => {
     expect(await readFile(path.join(root, "public", "requirements", poolInstance(), batch.id, "SUMMARY.md"), "utf8")).toContain("accepted");
   }, 30000);
   it("bounds retries, keeps all attempts, and never releases dependents of failed work", async () => {
-    const batch = await create([task("fail"), task("dependent", ["fail"])]); const worker = executor(true); const svc = taskPoolService(db);
+    const batch = await create([task("fail"), task("dependent", ["fail"])]); const worker = executor(true); let clock = Date.now(); const svc = taskPoolService(db, () => clock);
     await svc.action(batch.id, { action: "publish" }, "user:planner");
-    for (let i = 0; i < 8; i++) await svc.tick(worker);
+    for (let i = 0; i < 8; i++) { await svc.tick(worker); clock += 60000; }
     const failed = (await svc.get(batch.id))!;
     expect(worker.calls).toEqual(["fail", "fail"]);
     expect(failed.state.status).toBe("needs_attention");
@@ -94,9 +178,9 @@ describe("durable task pool", () => {
     expect(failed.state.tasks[1]!.attempts).toHaveLength(0);
   }, 30000);
   it("grants one explicit retry with feedback and preserves exhausted attempts", async () => {
-    const batch = await create([task("retry")]); const svc = taskPoolService(db);
+    const batch = await create([task("retry")]); let clock = Date.now(); const svc = taskPoolService(db, () => clock);
     await svc.action(batch.id, { action: "publish" }, "user:planner");
-    for (let i = 0; i < 8; i++) await svc.tick(executor(true));
+    for (let i = 0; i < 8; i++) { await svc.tick(executor(true)); clock += 60000; }
     await svc.action(batch.id, { action: "retry_task", taskKey: "retry", feedback: "Environment repaired; try once" }, "user:planner");
     const worker = executor();
     for (let i = 0; i < 4; i++) await svc.tick(worker);

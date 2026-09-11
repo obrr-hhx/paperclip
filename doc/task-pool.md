@@ -84,7 +84,7 @@ Run the server under an OS service manager such as launchd on macOS, with an abs
 
 A successful process must also produce a valid result file and an allowed patch. The supervisor collects one commit per task, then builds a combined candidate. Tests reported by workers are evidence to inspect, not automatic acceptance. This is trusted local execution with post-run scope checks, not an OS sandbox or exactly-once external side effects. A crash may consume an attempt and trigger a fresh attempt within the configured budget.
 
-Notifications are durable inbox records. This version does not automatically inject messages into or start Codex/Claude conversations. The current planner can poll progress; a replacement conversation uses the skill to discover pending work and reconstruct the requirement, DAG, runs and exact candidate without the original transcript.
+Notifications are durable inbox records. Optional Codex notification bindings queue messages into an already-running local app-server; they never start a daemon or resume an unloaded thread. The current planner can poll progress; a replacement conversation uses the skill to discover pending work and reconstruct the requirement, DAG, runs and exact candidate without the original transcript.
 
 ## Board navigation
 
@@ -97,3 +97,17 @@ The board Inbox groups task-pool notifications by requirement. Ready candidates 
 ## Verification
 
 `server/src/__tests__/task-pool-service.test.ts` exercises a real embedded PostgreSQL database and Git worktrees: concurrent scanners, dependent patches, pause/resume, bounded and explicit retries, missing/invalid delivery, commit-before-DB recovery, new-session claims, stale manifests and projection rebuild. `task-pool-routes.test.ts` checks tenant isolation, worker permissions and review capability visibility. Live model and forced-server-crash trial evidence is kept outside the repository.
+
+## Planner session notifications
+
+Creation accepts `plannerNotification: { provider: "codex", endpoint: "ws://127.0.0.1:PORT", threadId: "THREAD_UUID" }`. The planner action `bind_planner` takes `notification` with the same shape, or null to unbind. The binding lives in the existing JSON config, so no database migration is required. It does not change review ownership. The planner client can attach this binding using PAPERCLIP_CODEX_NOTIFY_ENDPOINT and CODEX_THREAD_ID.
+
+For current needs_attention or ready_for_review events, projection connects to the existing endpoint, checks thread/loaded/list and invokes thread/queue/add. The native queue starts an idle thread or waits for its active turn. Closing a frontend window is not a delivery gate. Endpoints are restricted to credential-free loopback WebSockets; desktop/Claude transports require separate adapters and are not auto-discovered.
+
+Each event/recipient pair gets one best-effort delivery attempt, recorded under the private instance task-pool/notifications directory and reflected in public Inbox as plannerNotification. Repeated scans, syncs and process restarts reuse that receipt. A claim is written before sending; a crash can lose the live reminder, but durable Inbox is preserved. Offline/unloaded targets are skipped. Unknown outcomes are recorded without automatic retry. A new recipient gets its own attempt for a still-current event; superseded, accepted and ordinary progress events do not notify. Transport operations have a five-second deadline and never wait for model completion. Notification failures do not prevent Inbox projection.
+
+### Native local Codex binding
+
+`endpoint: "local"` (default) supports an existing Codex TUI without a WebSocket listener. Paperclip locates the exact thread rollout under CODEX_HOME/sessions, checks via lsof/ps that a Codex process holds it, then invokes `codex queue --thread UUID --message TEXT`. It never invokes daemon start or resume. Without a running holder it records session_not_running and preserves Inbox. Executable defaults to ~/.local/bin/codex; PAPERCLIP_CODEX_COMMAND can override it. This local adapter currently requires the macOS lsof/ps paths. Exit between the process check and queue write is a race: the resulting message may remain queued until a later resume.
+
+Planner skill defaults to local and auto-binds when CODEX_THREAD_ID is present. Explicit binding works for requirements created with a human-readable originSession. WebSocket targets remain optional; a retained backend thread may continue even after its frontend window closes.

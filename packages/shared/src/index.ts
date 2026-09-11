@@ -2759,5 +2759,5 @@ export type { ExecutionContinuationEnvelope } from "./types/execution-continuati
 export type { ExecutionProjection, ExecutionReconciliation, ExecutionBlocker } from "./types/execution-projection.js";
 
 export { EXECUTION_RECONCILIATION_CAUSES, requiresExecutionReconciliation } from "./types/execution-projection.js";
-export { poolTaskSchema, createTaskPoolSchema, taskPoolActionSchema } from "./task-pool.js";
-export type { PoolTaskSpec, PoolTask, PoolAttempt, PoolEvent, PoolState } from "./task-pool.js";
+export { plannerNotificationSchema, poolTaskSchema, createTaskPoolSchema, taskPoolActionSchema } from "./task-pool.js";
+export type { PlannerNotification, PoolTaskSpec, PoolTask, PoolAttempt, PoolEvent, PoolState } from "./task-pool.js";

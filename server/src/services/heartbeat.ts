@@ -1,3 +1,4 @@
+import { hostname } from "node:os";
 import { getExecutionBlocker } from "./execution-blocker.js";
 import { legacyAdapterOutcome } from "./heartbeat-run-outcome.js";
 import { legacyExecutionNeedsReconciliation, terminalizeLegacyExecution } from "./legacy-execution-recovery.js";
@@ -25471,6 +25472,21 @@ export function heartbeatService(
         enqueued: enqueued + issueMonitors.triggered,
         skipped: skipped + issueMonitors.skipped,
       };
+    },
+
+    // Only the host holding the execution handle can renew a pool lease.
+    // Log silence is not loss of ownership: long tools/thinking keep their lease.
+    inspectPoolExecution: async (runId: string, leaseHost?: string): Promise<"owned" | "stopped" | "unverified"> => {
+      if (activeRunExecutions.has(runId) || adapterExecutionControls.has(runId) || runningProcesses.has(runId)) return "owned";
+      const run = await getRun(runId);
+      if (!run) return "unverified";
+      if (run.status === "queued") return "unverified"; // The existing wake queue owns dispatch/recovery.
+      if (run.runtimeMode === "native" || leaseHost !== hostname()) return "unverified"; // Never probe a foreign host's PID locally.
+      const agent = await getAgent(run.agentId);
+      if (!agent || !isTrackedLocalChildProcessAdapter(agent.adapterType)) return "unverified";
+      if (isProcessAlive(run.processPid) || (run.processGroupId && isProcessGroupAlive(run.processGroupId))) return "unverified";
+      // No persisted identity may mean dispatch is between claim and spawn.
+      return run.processPid || run.processGroupId ? "stopped" : "unverified";
     },
 
     cancelRun: (runId: string, reason?: string, options?: CancelRunOptions) =>

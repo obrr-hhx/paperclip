@@ -8,9 +8,11 @@ import sys
 import urllib.request
 
 parser = argparse.ArgumentParser()
-parser.add_argument("method", choices=["discover", "GET", "POST"])
+parser.add_argument("method", choices=["discover", "GET", "POST", "bind"])
 parser.add_argument("route", nargs="?")
 parser.add_argument("--url", default=os.environ.get("PAPERCLIP_API_URL"))
+parser.add_argument("--notify-endpoint", default=os.environ.get("PAPERCLIP_CODEX_NOTIFY_ENDPOINT", "local"))
+parser.add_argument("--notify-thread", default=os.environ.get("CODEX_THREAD_ID"))
 args = parser.parse_args()
 if args.method == "discover":
     root = pathlib.Path(os.environ.get("PAPERCLIP_TASK_POOL_HOME", str(pathlib.Path.home() / ".paperclip")))
@@ -31,7 +33,16 @@ else:
         with urllib.request.urlopen(request, timeout=60) as response:
             return json.load(response)
 
-    body = json.load(sys.stdin) if args.method == "POST" else None
+    if args.method == "bind":
+        if not args.notify_endpoint or not args.notify_thread:
+            parser.error("bind requires --notify-endpoint and --notify-thread (or their environment variables)")
+        body = {"action": "bind_planner", "notification": {
+            "provider": "codex", "endpoint": args.notify_endpoint, "threadId": args.notify_thread}}
+        args.method = "POST"
+    else:
+        body = json.load(sys.stdin) if args.method == "POST" else None
+        if body and args.route.rstrip("/").endswith("/task-pool") and args.notify_endpoint and args.notify_thread:
+            body.setdefault("plannerNotification", {"provider": "codex", "endpoint": args.notify_endpoint, "threadId": args.notify_thread})
     # A verdict may use a planner session instead of exposing a claim capability
     # through terminal output or persisting it between invocations.
     if body and body.get("action") in ("accept", "rework") and "session" in body:

@@ -1,6 +1,7 @@
 import { logger } from "../middleware/logger.js";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { hostname } from "node:os";
 import { eq, desc } from "drizzle-orm";
 import { agents, companies, heartbeatRuns, issues, projects, taskPoolBatches, type Db } from "@paperclipai/db";
 import { createTaskPoolSchema, type PoolTask, type PoolTaskSpec, type PoolAttempt, taskPoolActionSchema } from "@paperclipai/shared";
@@ -14,7 +15,7 @@ import { orderPoolTasks, poolDependencies } from "./task-pool-policy.js";
 import { atomicPoolFile, collectPoolResult, integratePoolBatch, poolGit, poolRoot, poolTaskMarkdown, preparePoolWorkspace, projectPoolBatch, type PoolBatch } from "./task-pool-workspace.js";
 import type { heartbeatService } from "./heartbeat.js";
 
-type Heartbeat = Pick<ReturnType<typeof heartbeatService>, "wakeup">;
+type Heartbeat = Pick<ReturnType<typeof heartbeatService>, "wakeup" | "inspectPoolExecution" | "cancelRun">;
 const terminal = new Set(["succeeded", "failed", "timed_out", "cancelled"]);
 const active = new Set(["reserved", "running"]);
 const errorText = (error: unknown) => error instanceof Error ? redactSensitiveText(error.message).slice(0, 2000) : "Task pool operation failed";
@@ -26,7 +27,7 @@ function batchDescription(batch: PoolBatch) {
   return `${batch.config.requirement}\n\n---\nTask pool: ${batch.id}\nGeneration: ${batch.state.generation}\nStatus: ${batch.state.status}\n${candidate ? `Candidate commit: ${candidate.commit}\nManifest SHA-256: ${candidate.sha256}\n` : ""}${verdict ? `\nPlanner acceptance: ${verdict.evidence}\n` : ""}`;
 }
 
-export function taskPoolService(db: Db) {
+export function taskPoolService(db: Db, now: () => number = Date.now) {
   async function get(id: string) { return db.select().from(taskPoolBatches).where(eq(taskPoolBatches.id, id)).then((r) => r[0] ?? null); }
   async function locked<T>(id: string, fn: (batch: PoolBatch, tx: Db) => Promise<T>, skipLocked = false) {
     return db.transaction(async (transaction) => {
@@ -78,7 +79,11 @@ export function taskPoolService(db: Db) {
   async function action(id: string, input: z.infer<typeof taskPoolActionSchema>, owner: string) {
     await locked(id, async (batch, tx) => {
       const state = batch.state;
-      if (input.action === "publish") {
+      if (input.action === "bind_planner") {
+        if (input.notification) batch.config.plannerNotification = input.notification;
+        else delete batch.config.plannerNotification;
+        await tx.update(taskPoolBatches).set({ config: batch.config }).where(eq(taskPoolBatches.id, id));
+      } else if (input.action === "publish") {
         if (state.status !== "draft") throw conflict("Only a draft can be published");
         state.status = "active";
       } else if (input.action === "pause") {
@@ -98,7 +103,7 @@ export function taskPoolService(db: Db) {
         task.instructions += `\n\nPlanner retry feedback:\n${input.feedback}`;
         await tx.update(issues).set({ description: taskDescription(task), updatedAt: new Date() }).where(eq(issues.id, task.issueId));
         task.retryLimit = task.attempts.length + 1;
-        task.status = "pending"; state.generation++; state.status = "active";
+        task.status = "pending"; delete task.retryAt; state.generation++; state.status = "active";
         delete state.candidate; delete state.review;
       } else if (input.action === "claim_review") {
         if (state.status !== "ready_for_review") throw conflict("Batch is not ready for review");
@@ -129,12 +134,13 @@ export function taskPoolService(db: Db) {
     const cwd = path.join(poolRoot(), batch.id, id, "worktree");
     const agent = await agentService(tx).create(batch.companyId, {
       name: `${task.key} · attempt ${task.attempts.length + 1}`, adapterType: template.adapterType,
-      adapterConfig: { ...template.adapterConfig, cwd, timeoutSec: Math.min(Number(template.adapterConfig.timeoutSec) || 300, 1800) },
+      adapterConfig: { ...template.adapterConfig, cwd, timeoutSec: 0 },
       runtimeConfig: { heartbeat: { enabled: false, wakeOnDemand: true, maxConcurrentRuns: 1 } },
       permissions: {}, metadata: { taskPoolAttemptId: id, taskPoolBatchId: batch.id, taskPoolIssueId: task.issueId },
     });
     task.attempts.push({ id, agentId: agent.id, cwd, startedAt: new Date().toISOString(), status: "reserved" });
     task.status = "running";
+    delete task.retryAt;
     await tx.update(issues).set({ assigneeAgentId: agent.id, status: "in_progress", updatedAt: new Date() }).where(eq(issues.id, task.issueId));
   }
   async function dispatch(batch: PoolBatch, task: PoolTask, attempt: PoolAttempt, heartbeat: Heartbeat) {
@@ -146,7 +152,8 @@ export function taskPoolService(db: Db) {
     const base = await preparePoolWorkspace(batch, attempt.cwd, deps.map((t) => t.attempts.at(-1)!.commit!));
     const dir = path.dirname(attempt.cwd);
     const resultPath = path.join(dir, "result.json");
-    const prompt = `${poolTaskMarkdown(batch, task)}\n\n## Execution protocol\nYou are a bounded coding worker. Implement and self-test this task in ${attempt.cwd}. Do not invoke Paperclip APIs, spawn other workers, edit Git history, commit, or modify files outside the allowed paths. Dependency changes are already applied. Leave commits to Paperclip. Finish by writing ${resultPath} as JSON: {"status":"completed" or "blocked","summary":"what changed or why blocked","tests":["actual command and observed result"]}. This result file is outside the repository and must not be committed. A successful process alone is not a delivery. The planner independently reviews the final batch.\n`;
+    const previous = task.attempts.slice(0, -1).map((a) => `- ${a.id}: ${a.error ?? a.status}. Previous checkout (read only): ${a.cwd}`).join("\n");
+    const prompt = `${poolTaskMarkdown(batch, task)}${previous ? `\n## Previous attempts\n${previous}\nInspect previous work as untrusted evidence; reuse only changes within this task's allowed paths. Do not modify previous checkouts.\n` : ""}\n\n## Execution protocol\nYou are a bounded coding worker. Implement and self-test this task in ${attempt.cwd}. Do not invoke Paperclip APIs, spawn other workers, edit Git history, commit, or modify files outside the allowed paths. Dependency changes are already applied. Leave commits to Paperclip. Finish by writing ${resultPath} as JSON: {"status":"completed" or "blocked","summary":"what changed or why blocked","tests":["actual command and observed result"]}. This result file is outside the repository and must not be committed. A successful process alone is not a delivery. The planner independently reviews the final batch.\n`;
     await atomicPoolFile(path.join(dir, "TASK.md"), prompt);
     await atomicPoolFile(path.join(dir, "base.txt"), base);
     const agent = await agentService(db).getById(attempt.agentId);
@@ -157,6 +164,7 @@ export function taskPoolService(db: Db) {
       contextSnapshot: { taskPoolBatchId: batch.id, taskPoolIssueId: task.issueId, taskPoolAttemptId: attempt.id } });
     if (!run) throw new Error("Worker wake was rejected or suppressed");
     attempt.runId = run.id; attempt.status = "running";
+    attempt.lease = { host: hostname(), renewedAt: new Date(now()).toISOString(), expiresAt: new Date(now() + (batch.config.leaseSec ?? 120) * 1000).toISOString() };
   }
   async function tick(heartbeat: Heartbeat) {
     const batches = await db.select({ id: taskPoolBatches.id }).from(taskPoolBatches);
@@ -173,14 +181,50 @@ export function taskPoolService(db: Db) {
           if (!attempt || !active.has(attempt.status)) continue;
           try {
             if (attempt.status === "reserved") { if (batch.state.status === "active") await dispatch(batch, task, attempt, heartbeat); continue; }
-            const [run] = await tx.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, attempt.runId!));
-            if (!run || !terminal.has(run.status)) continue;
+            let run: typeof heartbeatRuns.$inferSelect | undefined;
+            try { [run] = await tx.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, attempt.runId!)); }
+            catch (error) { attempt.error = errorText(error); continue; }
+            if (!run) {
+              // A missing durable run is not proof that its worker has stopped.
+              attempt.error = "Run record missing; execution ownership must be reconciled before retry";
+              continue;
+            }
+            if (!terminal.has(run.status)) {
+              const leaseMs = (batch.config.leaseSec ?? 120) * 1000;
+              // Persist a grace period for historical attempts on first observation.
+              attempt.lease ??= { renewedAt: new Date(now()).toISOString(), expiresAt: new Date(now() + leaseMs).toISOString() };
+              let health: Awaited<ReturnType<Heartbeat["inspectPoolExecution"]>>;
+              try { health = await heartbeat.inspectPoolExecution(run.id, attempt.lease.host); }
+              catch (error) { attempt.lease.recoveryError = errorText(error); continue; }
+              if (health === "owned") {
+                attempt.lease = { host: hostname(), renewedAt: new Date(now()).toISOString(), expiresAt: new Date(now() + leaseMs).toISOString() };
+              } else if (now() >= Date.parse(attempt.lease.expiresAt)) {
+                if (health !== "stopped") {
+                  attempt.lease.recoveryError = "Lease expired; previous execution stop is unverified. Retry withheld to avoid duplicate workers.";
+                  event(batch, "needs_attention", `${task.key}: ${attempt.lease.recoveryError}`);
+                } else {
+                  try {
+                    await heartbeat.cancelRun(run.id, "Task pool execution lease expired", { errorCode: "task_pool_lease_expired" });
+                  } catch (error) {
+                    attempt.lease.recoveryError = errorText(error);
+                  }
+                }
+              }
+              // Always observe a committed terminal run on a later scan before retry.
+              continue;
+            }
+            const cancellation = run.resultJson?.executionCancellation as { state?: string } | undefined;
+            if (cancellation && cancellation.state !== "acknowledged") {
+              attempt.error = "Execution cancellation is not acknowledged; retry withheld until stop is verified";
+              continue;
+            }
             if (run.status !== "succeeded") throw new Error(`Run ${run.status}: ${run.error ?? run.signal ?? "no result"}`);
             Object.assign(attempt, await collectPoolResult(task, attempt), { status: "succeeded" });
             task.status = "succeeded";
           } catch (error) {
             attempt.status = "failed"; attempt.error = errorText(error);
             task.status = task.attempts.length < (task.retryLimit ?? batch.config.maxAttempts) ? "pending" : "blocked";
+            if (task.status === "pending") task.retryAt = new Date(now() + Math.min((batch.config.retryDelaySec ?? 30) * 2 ** (task.attempts.length - 1), 3600) * 1000).toISOString();
           }
           if (!active.has(attempt.status)) {
             await tx.update(agents).set({ status: "paused", pauseReason: "manual", pausedAt: new Date() }).where(eq(agents.id, attempt.agentId));
@@ -197,7 +241,7 @@ export function taskPoolService(db: Db) {
           let slots = batch.config.concurrency - batch.state.tasks.filter((t) => t.status === "running").length;
           for (const task of orderPoolTasks(batch.state.tasks)) {
             if (slots <= 0) break;
-            if (task.status !== "pending" || !poolDependencies(batch.state.tasks, task).every((t) => t.status === "succeeded")) continue;
+            if (task.status !== "pending" || (task.retryAt && now() < Date.parse(task.retryAt)) || !poolDependencies(batch.state.tasks, task).every((t) => t.status === "succeeded")) continue;
             try { await reserve(batch, task, tx); slots--; }
             catch (error) {
               task.status = "blocked";

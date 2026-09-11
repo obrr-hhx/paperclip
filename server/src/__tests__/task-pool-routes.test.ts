@@ -35,6 +35,12 @@ describe("task pool authorization", () => {
     const response = await request(app({ type: "agent", agentId: id, companyId })).post(`/task-pool/${id}/actions`).send({ action: "publish" });
     expect(response.status).toBe(403); expect(mocks.action).not.toHaveBeenCalled();
   });
+  it("does not let pool workers redirect planner notifications", async () => {
+    mocks.getAgent.mockResolvedValue({ metadata: { taskPoolAttemptId: id } }); mocks.hasPermission.mockResolvedValue(true);
+    const response = await request(app({ type: "agent", agentId: id, companyId })).post(`/task-pool/${id}/actions`)
+      .send({ action: "bind_planner", notification: { provider: "codex", threadId: id, endpoint: "ws://127.0.0.1:39281" } });
+    expect(response.status).toBe(403); expect(mocks.action).not.toHaveBeenCalled();
+  });
   it("allows the local planner to claim review and receive its capability", async () => {
     const response = await request(app({ type: "board", source: "local_implicit", userId: "local" })).post(`/task-pool/${id}/actions`).send({ action: "claim_review", session: "replacement" });
     expect(response.status).toBe(200); expect(response.body.state.review.token).toBe(token);

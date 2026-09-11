@@ -9,6 +9,7 @@ import type { taskPoolBatches } from "@paperclipai/db";
 import type { PoolTask, PoolAttempt } from "@paperclipai/shared";
 import { resolvePaperclipInstanceRoot } from "../home-paths.js";
 import { redactSensitiveText } from "../redaction.js";
+import { notifyPoolPlanner } from "./task-pool-notifications.js";
 import { poolPathAllowed, orderPoolTasks } from "./task-pool-policy.js";
 
 export type PoolBatch = typeof taskPoolBatches.$inferSelect;
@@ -75,16 +76,21 @@ export async function projectPoolBatch(batch: PoolBatch) {
   const context = { instanceId: poolInstance(), batchId: batch.id, companyId: batch.companyId, issueId: batch.issueId,
     apiUrl: `${baseUrl}/api`, generation: batch.state.generation, status: batch.state.status,
     syncedAt: new Date().toISOString(), candidate: batch.state.candidate,
-    tasks: batch.state.tasks.map((t) => ({ key: t.key, issueId: t.issueId, status: t.status, attempts: t.attempts })),
+    tasks: batch.state.tasks.map((t) => ({ key: t.key, issueId: t.issueId, status: t.status, retryAt: t.retryAt, attempts: t.attempts })),
     originSession: batch.config.originSession };
   await atomicPoolFile(path.join(root, "context.json"), JSON.stringify(context, null, 2));
   await atomicPoolFile(path.join(root, "REQUIREMENT.md"), redactSensitiveText(batch.config.requirement));
-  await atomicPoolFile(path.join(root, "SUMMARY.md"), `# ${batch.config.title}\n\nStatus: ${batch.state.status}\nGeneration: ${batch.state.generation}\nSynced: ${context.syncedAt}\nBoard: ${baseUrl}/issues/${batch.issueId}\n\n${batch.state.tasks.map((t) => `- ${t.key}: ${t.status} (${t.attempts.length} attempts)`).join("\n")}\n\nRead current server state before claiming review or submitting a verdict. Files are a regenerable index, not the source of truth.\n`);
+  await atomicPoolFile(path.join(root, "SUMMARY.md"), `# ${batch.config.title}\n\nStatus: ${batch.state.status}\nGeneration: ${batch.state.generation}\nSynced: ${context.syncedAt}\nBoard: ${baseUrl}/issues/${batch.issueId}\n\n${batch.state.tasks.map((t) => `- ${t.key}: ${t.status} (${t.attempts.length} attempts)${t.retryAt ? `; retry after ${t.retryAt}` : ""}${t.attempts.at(-1)?.lease?.recoveryError ? `; ${t.attempts.at(-1)!.lease!.recoveryError}` : ""}`).join("\n")}\n\nRead current server state before claiming review or submitting a verdict. Files are a regenerable index, not the source of truth.\n`);
   for (const task of batch.state.tasks) await atomicPoolFile(path.join(root, "tasks", `${task.key}.md`), redactSensitiveText(poolTaskMarkdown(batch, task)));
+  // Notification failures must not prevent durable Inbox projection or worker dispatch.
+  let plannerNotification;
+  try { plannerNotification = await notifyPoolPlanner(batch, path.join(poolRoot(), "notifications"), context.apiUrl); }
+  catch { plannerNotification = { status: "failed", reason: "receipt_io_error", updatedAt: new Date().toISOString() }; }
   for (const event of batch.state.events) {
     await atomicPoolFile(path.join(poolPublicRoot(), "inbox", `${event.id}.json`), JSON.stringify({ ...event,
       batchId: batch.id, instanceId: poolInstance(), apiUrl: context.apiUrl, companyId: batch.companyId,
       currentStatus: batch.state.status, superseded: event.generation !== batch.state.generation || batch.state.status === "accepted",
+      plannerNotification: event.generation === batch.state.generation && event.type === batch.state.status ? plannerNotification : undefined,
       requirementPath: root }, null, 2));
   }
 }

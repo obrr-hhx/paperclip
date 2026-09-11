@@ -11,6 +11,19 @@ export const poolTaskSchema = z.object({
   acceptance: z.array(z.string().min(1).max(2000)).min(1).max(30),
   dependsOn: z.array(z.string()).max(100).default([]),
 }).strict();
+export const plannerNotificationSchema = z.object({
+  provider: z.literal("codex"),
+  threadId: z.string().uuid(),
+  endpoint: z.string().max(200).refine((value) => {
+    if (value === "local") return true;
+    try {
+      const url = new URL(value);
+      return url.protocol === "ws:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)
+        && !!url.port && !url.username && !url.password && !url.search && !url.hash && url.pathname === "/";
+    } catch { return false; }
+  }, "Use local or an existing loopback Codex WebSocket endpoint, without credentials").default("local"),
+}).strict();
+export type PlannerNotification = z.infer<typeof plannerNotificationSchema>;
 export const createTaskPoolSchema = z.object({
   title: z.string().min(1).max(200),
   requirement: z.string().min(1).max(50000),
@@ -19,11 +32,15 @@ export const createTaskPoolSchema = z.object({
   templateAgentId: z.string().uuid(),
   projectId: z.string().uuid().optional(),
   concurrency: z.number().int().min(1).max(4).default(2),
+  leaseSec: z.number().int().min(30).max(3600).default(120),
+  retryDelaySec: z.number().int().min(1).max(3600).default(30),
   maxAttempts: z.number().int().min(1).max(3).default(2),
   originSession: z.string().max(200).optional(),
+  plannerNotification: plannerNotificationSchema.optional(),
   tasks: z.array(poolTaskSchema).min(1).max(100),
 }).strict();
 export const taskPoolActionSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("bind_planner"), notification: plannerNotificationSchema.nullable() }).strict(),
   z.object({ action: z.literal("publish") }).strict(),
   z.object({ action: z.literal("pause") }).strict(),
   z.object({ action: z.literal("resume") }).strict(),
@@ -33,8 +50,8 @@ export const taskPoolActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("rework"), token: z.string().uuid(), candidate: z.string().regex(/^[a-f0-9]{64}$/), feedback: z.string().min(1).max(20000), tasks: z.array(poolTaskSchema).min(1).max(100) }).strict(),
 ]);
 export type PoolTaskSpec = z.infer<typeof poolTaskSchema>;
-export type PoolAttempt = { id: string; agentId: string; cwd: string; startedAt: string; runId?: string; status: "reserved" | "running" | "succeeded" | "failed"; error?: string; commit?: string; summary?: string; tests?: string[] };
-export type PoolTask = PoolTaskSpec & { issueId: string; status: "pending" | "running" | "succeeded" | "blocked"; retryLimit?: number; attempts: PoolAttempt[] };
+export type PoolAttempt = { id: string; agentId: string; cwd: string; startedAt: string; runId?: string; status: "reserved" | "running" | "succeeded" | "failed"; error?: string; commit?: string; summary?: string; tests?: string[]; lease?: { host?: string; renewedAt: string; expiresAt: string; recoveryError?: string } };
+export type PoolTask = PoolTaskSpec & { issueId: string; status: "pending" | "running" | "succeeded" | "blocked"; retryLimit?: number; retryAt?: string; attempts: PoolAttempt[] };
 export type PoolEvent = { id: string; type: "ready_for_review" | "needs_attention" | "accepted"; generation: number; createdAt: string; candidate?: string; evidence?: string };
 export type PoolState = {
   generation: number; status: "draft" | "active" | "paused" | "needs_attention" | "ready_for_review" | "accepted";
