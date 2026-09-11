@@ -89,6 +89,38 @@ describe("durable task pool", () => {
     expect(resumed.state.events.at(-1)?.type).toBe("needs_attention");
     await expect(svc.action(batch.id, { action: "resume" }, "user:planner")).rejects.toThrow("Attempts exhausted");
   });
+  it("retries transport failures independently of a one-attempt coding budget, with durable backoff and a cap", async () => {
+    const batch = await create([task("transport")]); batch.config.maxAttempts = 1;
+    await db.update(taskPoolBatches).set({ config: batch.config }).where(eq(taskPoolBatches.id, batch.id));
+    let clock = Date.now(); const svc = taskPoolService(db, () => clock);
+    const worker = executor();
+    worker.wakeup.mockImplementation(async (agentId: string) => (await db.insert(heartbeatRuns).values({ companyId: batch.companyId, agentId, invocationSource: "automation", status: "failed", errorCode: "adapter_failed", error: "Cannot connect to API: Unable to connect", finishedAt: new Date() }).returning())[0]!);
+    await svc.action(batch.id, { action: "publish" }, "user:planner");
+    for (let count = 1; count <= 3; count++) {
+      await svc.tick(worker); await svc.tick(worker); await svc.tick(worker);
+      const current = (await svc.get(batch.id))!; const t = current.state.tasks[0];
+      expect(t.attempts).toHaveLength(count); expect(t.attempts.at(-1)?.failureKind).toBe("transport");
+      expect(t.status).toBe(count < 3 ? "pending" : "blocked");
+      if (count < 3) {
+        expect(Date.parse(t.retryAt!)).toBe(clock + 30000 * 2 ** (count - 1));
+        await taskPoolService(db, () => clock).tick(worker);
+        expect(worker.wakeup).toHaveBeenCalledTimes(count);
+        clock = Date.parse(t.retryAt!);
+      }
+    }
+    expect((await svc.get(batch.id))!.state.status).toBe("needs_attention");
+  });
+  it("does not retry authentication errors as transient transport failures", async () => {
+    const batch = await create([task("auth_failure")]); batch.config.maxAttempts = 1;
+    await db.update(taskPoolBatches).set({ config: batch.config }).where(eq(taskPoolBatches.id, batch.id));
+    const svc = taskPoolService(db); const worker = executor();
+    worker.wakeup.mockImplementation(async (agentId: string) => (await db.insert(heartbeatRuns).values({ companyId: batch.companyId, agentId, invocationSource: "automation", status: "failed", errorCode: "adapter_failed", error: "Cannot connect to API: 401 unauthorized", finishedAt: new Date() }).returning())[0]!);
+    await svc.action(batch.id, { action: "publish" }, "user:planner");
+    await svc.tick(worker); await svc.tick(worker); await svc.tick(worker);
+    const t = (await svc.get(batch.id))!.state.tasks[0];
+    expect(t.status).toBe("blocked"); expect(t.attempts[0].failureKind).toBe("execution");
+    expect(t.retryAt).toBeUndefined();
+  });
   it("persists planner rebinding and unbinding without changing workflow state", async () => {
     const batch = await create([task("binding")]);
     const notification = { provider: "codex" as const, endpoint: "ws://127.0.0.1:39281", threadId: randomUUID() };

@@ -34,6 +34,7 @@ export const createTaskPoolSchema = z.object({
   concurrency: z.number().int().min(1).max(4).default(2),
   leaseSec: z.number().int().min(30).max(3600).default(120),
   retryDelaySec: z.number().int().min(1).max(3600).default(30),
+  maxTransportRetries: z.number().int().min(0).max(5).default(2),
   maxAttempts: z.number().int().min(1).max(3).default(2),
   originSession: z.string().max(200).optional(),
   plannerNotification: plannerNotificationSchema.optional(),
@@ -51,7 +52,7 @@ export const taskPoolActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("rework"), token: z.string().uuid(), candidate: z.string().regex(/^[a-f0-9]{64}$/), feedback: z.string().min(1).max(20000), tasks: z.array(poolTaskSchema).min(1).max(100) }).strict(),
 ]);
 export type PoolTaskSpec = z.infer<typeof poolTaskSchema>;
-export type PoolAttempt = { id: string; agentId: string; cwd: string; startedAt: string; runId?: string; status: "reserved" | "running" | "succeeded" | "failed"; error?: string; commit?: string; summary?: string; tests?: string[]; lease?: { host?: string; renewedAt: string; expiresAt: string; recoveryError?: string } };
+export type PoolAttempt = { id: string; agentId: string; cwd: string; startedAt: string; runId?: string; status: "reserved" | "running" | "succeeded" | "failed"; failureKind?: "transport" | "execution"; error?: string; commit?: string; summary?: string; tests?: string[]; lease?: { host?: string; renewedAt: string; expiresAt: string; recoveryError?: string } };
 export type PoolClosure = { status: "closed" | "superseded"; reason: string; replacement?: string; owner: string; createdAt: string };
 export type PoolTask = PoolTaskSpec & { issueId: string; status: "pending" | "running" | "succeeded" | "blocked" | "closed" | "superseded"; closure?: PoolClosure; retryLimit?: number; retryAt?: string; attempts: PoolAttempt[] };
 export type PoolEvent = { id: string; type: "ready_for_review" | "needs_attention" | "accepted"; generation: number; createdAt: string; candidate?: string; evidence?: string };

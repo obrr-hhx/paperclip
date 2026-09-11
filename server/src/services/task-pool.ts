@@ -206,6 +206,7 @@ export function taskPoolService(db: Db, now: () => number = Date.now) {
         for (const task of batch.state.tasks) {
           const attempt = task.attempts.at(-1);
           if (!attempt || !active.has(attempt.status)) continue;
+          let transportFailure = false;
           try {
             if (attempt.status === "reserved") { if (batch.state.status === "active") await dispatch(batch, task, attempt, heartbeat); continue; }
             let run: typeof heartbeatRuns.$inferSelect | undefined;
@@ -245,13 +246,24 @@ export function taskPoolService(db: Db, now: () => number = Date.now) {
               attempt.error = "Execution cancellation is not acknowledged; retry withheld until stop is verified";
               continue;
             }
+            // Only classify a confirmed adapter failure, never worker reports or validation failures.
+            transportFailure = run.status === "failed" && run.errorCode === "adapter_failed"
+              && /cannot connect to api|unable to connect|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|fetch failed/i.test(run.error ?? "")
+              && !/401|403|unauthorized|forbidden|invalid.api.key/i.test(run.error ?? "");
             if (run.status !== "succeeded") throw new Error(`Run ${run.status}: ${run.error ?? run.signal ?? "no result"}`);
             Object.assign(attempt, await collectPoolResult(task, attempt), { status: "succeeded" });
             task.status = "succeeded";
           } catch (error) {
             attempt.status = "failed"; attempt.error = errorText(error);
-            task.status = task.attempts.length < (task.retryLimit ?? batch.config.maxAttempts) ? "pending" : "blocked";
+            attempt.failureKind = transportFailure ? "transport" : "execution";
+            const transportFailures = task.attempts.filter((a) => a.failureKind === "transport").length;
+            const workAttempts = task.attempts.length - transportFailures;
+            const retry = transportFailure
+              ? transportFailures <= (batch.config.maxTransportRetries ?? 2)
+              : task.retryLimit ? task.attempts.length < task.retryLimit : workAttempts < batch.config.maxAttempts;
+            task.status = retry && task.attempts.length < 10 ? "pending" : "blocked";
             if (task.status === "pending") task.retryAt = new Date(now() + Math.min((batch.config.retryDelaySec ?? 30) * 2 ** (task.attempts.length - 1), 3600) * 1000).toISOString();
+            else delete task.retryAt;
           }
           if (!active.has(attempt.status)) {
             await tx.update(agents).set({ status: "paused", pauseReason: "manual", pausedAt: new Date() }).where(eq(agents.id, attempt.agentId));
